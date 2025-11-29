@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="تطبيق ويب احترافي مع تصميم عصري">
+    <title>MeshalStock - لوحة التحكم</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Chart.js and Financial Chart Plugin -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial/dist/chartjs-chart-financial.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <style>
+        /* منع التمدد الأفقي للصفحة بالكامل */
+        html, body {
+            overflow-x: hidden !important;
+            max-width: 100vw !important;
+            height: 100vh !important;
+        }
+        
+        /* منع scroll رأسي عند عرض الشارت */
+        body.chart-view {
+            overflow-y: hidden !important;
+        }
+        
+        /* ضمان أن padding لا يزيد العرض */
+        * {
+            box-sizing: border-box !important;
+        }
+        
+        
+        /* تخصيص ألوان الشموع */
+        canvas {
+            --candlestick-up-color: #0B3D0B !important;
+            --candlestick-down-color: #B71C1C !important;
+        }
+        
+        /* زر إخفاء/إظهار القائمة الجانبية */
+        .sidebar-toggle {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            z-index: 1000;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+            transition: all 0.3s ease;
+        }
+        
+        .sidebar-toggle:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+        }
+        
+        .sidebar-toggle svg {
+            stroke: white;
+        }
+        
+        /* إخفاء القائمة الجانبية افتراضياً */
+        .sidebar {
+            transform: translateX(100%);
+            transition: transform 0.3s ease, opacity 0.3s ease;
+            top: 140px !important; /* تبدأ من تحت الزر */
+            height: calc(100vh - 140px) !important; /* الارتفاع من تحت الزر حتى نهاية الشاشة */
+        }
+        
+        /* إظهار القائمة عند التفعيل */
+        .sidebar.active {
+            transform: translateX(0);
+        }
+        
+        /* توسيع المحتوى بشكل ديناميكي */
+        .main-content {
+            margin-right: 0;
+            width: 100%;
+            overflow-x: hidden;
+            transition: margin-right 0.3s ease, width 0.3s ease;
+        }
+        
+        /* عند فتح القائمة - تصغير المحتوى */
+        .container.sidebar-open .main-content {
+            margin-right: 280px;
+            width: calc(100% - 280px);
+        }
+        
+        /* تأكد من أن container لا يتجاوز الشاشة */
+        .container {
+            overflow-x: hidden !important;
+            max-width: 100vw !important;
+        }
+        
+        /* الأقسام العادية تتفاعل مع القائمة الجانبية */
+        #market-overview,
+        #stock-list-section {
+            transition: all 0.3s ease;
+            width: 100%;
+            max-width: 100%;
+        }
+        
+        /* توسيع المحتوى عند الشارت - مكرر تم حذفه */
+        
+        /* عنوان التبويب الحالي */
+        .current-section-title {
+            position: fixed;
+            top: 90px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 6px 0;
+            font-weight: 700;
+            color: #667eea;
+            font-size: 1.1rem;
+            z-index: 998;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+        }
+        
+        .current-section-title.show {
+            opacity: 1;
+            visibility: visible;
+        }
+        
+        /* قائمة الأسهم في جان وفيبو - تتمدد عند إخفاء القائمة الرئيسية */
+        .fg-sidebar {
+            width: 280px !important;
+            min-width: 280px !important;
+            height: 100% !important;
+            flex-shrink: 0 !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+            transition: width 0.3s ease, min-width 0.3s ease !important;
+        }
+        
+        /* عند فتح القائمة الرئيسية - تصغير قائمة الأسهم */
+        .container.sidebar-open .fg-sidebar {
+            width: 200px !important;
+            min-width: 200px !important;
+        }
+        
+        /* توسيع الشارت ليأخذ باقي المساحة */
+        .fg-content {
+            flex: 1 !important;
+            width: auto !important;
+            min-width: 0 !important;
+            height: 100% !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            transition: all 0.3s ease !important;
+        }
+        
+        /* الحاوية تستخدم flexbox - تمتد لكامل العرض المتاح */
+        .fg-container {
+            display: flex !important;
+            gap: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            height: calc(100vh - 200px) !important;
+            overflow-x: hidden !important;
+            overflow-y: hidden !important;
+            transition: all 0.3s ease !important;
+        }
+        
+        /* عند إخفاء القائمة الرئيسية - امتداد كامل لجان وفيبو */
+        #fibo-gann-section,
+        #fibo-filter {
+            width: 100%;
+            max-width: 100%;
+            height: calc(100vh - 140px);
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+            overflow-y: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        /* عند فتح القائمة الرئيسية - تقليص الأقسام */
+        .container.sidebar-open #fibo-gann-section,
+        .container.sidebar-open #fibo-filter {
+            width: 100%;
+            max-width: 100%;
+        }
+        
+        /* Canvas يمتد لكامل العرض */
+        .chart-wrapper {
+            width: 100% !important;
+            height: 100% !important;
+            position: relative !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            overflow: hidden !important;
+        }
+        
+        .chart-wrapper canvas {
+            width: 100% !important;
+            height: 100% !important;
+        }
+    </style>
+</head>
+<body>
+    <!-- البنر العلوي -->
+    <header class="top-banner">
+        <div class="banner-content">
+            <div class="logo-section">
+                <div class="logo-icon">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="16" cy="16" r="14" fill="url(#gradient1)"/>
+                        <path d="M16 8L20 16L16 24L12 16L16 8Z" fill="white" opacity="0.9"/>
+                        <defs>
+                            <linearGradient id="gradient1" x1="0" y1="0" x2="32" y2="32">
+                                <stop offset="0%" stop-color="#667eea"/>
+                                <stop offset="100%" stop-color="#764ba2"/>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                </div>
+                <h1 class="logo-text">MeshalStock</h1>
+            </div>
+            
+            <div class="header-actions">
+                <div class="user-profile">
+                    <div class="user-avatar">م</div>
+                    <span class="user-name">مشعل</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- عنوان التبويب الحالي -->
+        <div id="current-section-title" class="current-section-title"></div>
+        
+        <!-- زر القائمة -->
+        <button id="sidebar-toggle" class="sidebar-toggle" title="القائمة">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="3" y1="12" x2="21" y2="12"></line>
+                <line x1="3" y1="6" x2="21" y2="6"></line>
+                <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+        </button>
+        
+        <!-- السلايدبار الأيمن -->
+        <aside class="sidebar" id="main-sidebar">
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                        <polyline points="9 22 9 12 15 12 15 22"/>
+                    </svg>
+                    <span>الرئيسية</span>
+                </a>
+
+                <a href="#" class="nav-item" id="update-data-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 12a9 9 0 11-6.219-8.56"/>
+                        <polyline points="21 12 21 6"/>
+                    </svg>
+                    <span>تحديث البيانات</span>
+                </a>
+                
+                <a href="#" class="nav-item" id="stock-list-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="23 4 23 10 17 10"/>
+                        <polyline points="1 20 1 14 7 14"/>
+                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                    </svg>
+                    <span>قائمة الأسهم</span>
+                </a>
+
+                <a href="#" class="nav-item">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="1" x2="12" y2="23"></line>
+                        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                    </svg>
+                    <span>جان وفيبو</span>
+                </a>
+
+                <a href="#" class="nav-item">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+                    </svg>
+                    <span>فلترة جان وفيبو</span>
+                </a>
+                
+                <div class="nav-divider"></div>
+
+                <a href="#" class="nav-item" id="logout-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                        <polyline points="16 17 21 12 16 7"></polyline>
+                        <line x1="21" y1="12" x2="9" y2="12"></line>
+                    </svg>
+                    <span>تسجيل خروج</span>
+                </a>
+            </nav>
+        </aside>
+
+        <!-- المحتوى الرئيسي -->
+        <main class="main-content">
+
+
+            <!-- البطاقات الإحصائية -->
+
+
+            <!-- ملخص السوق -->
+            <div class="market-overview">
+                <div class="section-header" style="padding-right: 20px;">
+                    <h3>أسواق المال (مباشر)</h3>
+                    <span class="last-update">آخر تحديث: <span id="last-update-time">-</span></span>
+                </div>
+                
+                <div class="market-grid">
+                    <!-- تاسي -->
+                    <div class="market-card" id="card-TASI">
+                        <div class="market-info">
+                            <div class="market-name">
+                                <span class="market-flag">🇸🇦</span>
+                                <span>تاسي</span>
+                            </div>
+                            <div class="market-price">---</div>
+                        </div>
+                        <div class="market-change">
+                            <span class="change-value">---</span>
+                            <span class="change-percent">---</span>
+                        </div>
+                    </div>
+
+                    <!-- داوجونز -->
+                    <div class="market-card" id="card-DJI">
+                        <div class="market-info">
+                            <div class="market-name">
+                                <span class="market-flag">🇺🇸</span>
+                                <span>داوجونز</span>
+                            </div>
+                            <div class="market-price">---</div>
+                        </div>
+                        <div class="market-change">
+                            <span class="change-value">---</span>
+                            <span class="change-percent">---</span>
+                        </div>
+                    </div>
+
+                    <!-- ناسداك -->
+                    <div class="market-card" id="card-NASDAQ">
+                        <div class="market-info">
+                            <div class="market-name">
+                                <span class="market-flag">🇺🇸</span>
+                                <span>ناسداك</span>
+                            </div>
+                            <div class="market-price">---</div>
+                        </div>
+                        <div class="market-change">
+                            <span class="change-value">---</span>
+                            <span class="change-percent">---</span>
+                        </div>
+                    </div>
+
+                    <!-- S&P 500 -->
+                    <div class="market-card" id="card-SP500">
+                        <div class="market-info">
+                            <div class="market-name">
+                                <span class="market-flag">🇺🇸</span>
+                                <span>S&P 500</span>
+                            </div>
+                            <div class="market-price">---</div>
+                        </div>
+                        <div class="market-change">
+                            <span class="change-value">---</span>
+                            <span class="change-percent">---</span>
+                        </div>
+                    </div>
+
+                    <!-- النفط -->
+                    <div class="market-card" id="card-OIL">
+                        <div class="market-info">
+                            <div class="market-name">
+                                <span class="market-flag">🛢️</span>
+                                <span>النفط</span>
+                            </div>
+                            <div class="market-price">---</div>
+                        </div>
+                        <div class="market-change">
+                            <span class="change-value">---</span>
+                            <span class="change-percent">---</span>
+                        </div>
+                    </div>
+
+                    <!-- الذهب -->
+                    <div class="market-card" id="card-GOLD">
+                        <div class="market-info">
+                            <div class="market-name">
+                                <span class="market-flag">🥇</span>
+                                <span>الذهب</span>
+                            </div>
+                            <div class="market-price">---</div>
+                        </div>
+                        <div class="market-change">
+                            <span class="change-value">---</span>
+                            <span class="change-percent">---</span>
+                        </div>
+                    </div>
+
+                    <!-- الفضة -->
+                    <div class="market-card" id="card-SILVER">
+                        <div class="market-info">
+                            <div class="market-name">
+                                <span class="market-flag">🥈</span>
+                                <span>الفضة</span>
+                            </div>
+                            <div class="market-price">---</div>
+                        </div>
+                        <div class="market-change">
+                            <span class="change-value">---</span>
+                            <span class="change-percent">---</span>
+                        </div>
+                    </div>
+
+                    <!-- بيتكوين -->
+                    <div class="market-card" id="card-BTC">
+                        <div class="market-info">
+                            <div class="market-name">
+                                <span class="market-flag">₿</span>
+                                <span>بيتكوين</span>
+                            </div>
+                            <div class="market-price">---</div>
+                        </div>
+                        <div class="market-change">
+                            <span class="change-value">---</span>
+                            <span class="change-percent">---</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- قسم قائمة الأسهم -->
+            <div id="stock-list-section" class="section-hidden">
+                <div class="section-header">
+                    <h3>قائمة الأسهم</h3>
+                    <div class="list-controls">
+                        <button class="fg-tab active" data-list-market="saudi">السوق السعودي</button>
+                        <button class="fg-tab" data-list-market="us">السوق الأمريكي</button>
+                    </div>
+                </div>
+                
+                <div style="display: flex; align-items: center; gap: 15px; margin: 15px 0; padding: 0 20px; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <label style="color: var(--text-secondary); font-weight: 500;">التاريخ:</label>
+                        <input type="date" id="stock-date-picker" style="
+                            padding: 8px 12px;
+                            border: 1px solid rgba(255,255,255,0.1);
+                            background: rgba(255,255,255,0.05);
+                            color: var(--text-primary);
+                            border-radius: 8px;
+                            font-family: 'Tajawal', sans-serif;
+                            cursor: pointer;
+                        ">
+                        <button id="stock-date-reset" style="
+                            padding: 8px 16px;
+                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                            color: white;
+                            border: none;
+                            border-radius: 8px;
+                            cursor: pointer;
+                            font-family: 'Tajawal', sans-serif;
+                            font-weight: 500;
+                        ">آخر تاريخ</button>
+                    </div>
+                    <div style="color: var(--text-secondary); font-size: 0.9rem;">
+                        <span style="color: var(--text-primary); font-weight: 600;">البيانات المعروضة: </span>
+                        <span id="current-date-display" style="color: var(--purple);">جاري التحميل...</span>
+                    </div>
+                </div>
+                
+                <div class="stock-table-container">
+                    <table class="stock-table">
+                        <thead>
+                            <tr>
+                                <th>الرمز</th>
+                                <th>الاسم</th>
+                                <th>السعر</th>
+                                <th>التغيير</th>
+                                <th class="sortable" data-sort="percent">التغيير % <span class="sort-icon">↓</span></th>
+                                <th>الحجم</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stock-table-body">
+                            <!-- سيتم ملء الجدول هنا -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- قسم فيبو وجان (مخفي افتراضياً) -->
+            <div id="fibo-gann-section" class="section-hidden">
+                <div class="section-header" style="padding-right: 20px;">
+                    <h3>تحليل جان وفيبوناتشي</h3>
+                    <span class="last-update">رسم بياني تفاعلي مع مستويات التحليل الفني</span>
+                </div>
+                <div class="fg-container">
+                    <div class="fg-sidebar">
+                        <div class="fg-controls">
+                            <button class="fg-tab active" data-market="saudi">السوق السعودي</button>
+                            <button class="fg-tab" data-market="us">السوق الأمريكي</button>
+                        </div>
+                        <div class="fg-search">
+                            <input type="text" id="stock-search" placeholder="بحث عن سهم...">
+                        </div>
+                        <div class="fg-list-container">
+                            <div id="stock-list" class="fg-list">
+                                <!-- سيتم ملء القائمة هنا -->
+                                <div class="fg-loading">جاري التحميل...</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="fg-content">
+                        <div class="chart-wrapper">
+                            <canvas id="stock-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- قسم فلتر فيبو (Fibo Filter) -->
+            <div id="fibo-filter" class="content-section" style="display: none;">
+                <div class="section-header" style="padding-right: 20px;">
+                    <h3>فلترة جان وفيبوناتشي (كاشف الفرص)</h3>
+                    <span class="last-update">فحص تلقائي للأسهم المطابقة لمعايير الاختراق والارتداد</span>
+                </div>
+                <div class="fg-container">
+                    <!-- القائمة الجانبية للنتائج (25%) -->
+                    <div class="fg-sidebar">
+                        <div class="fg-controls">
+                            <button class="fg-tab active" data-filter-market="saudi">السوق السعودي</button>
+                            <button class="fg-tab" data-filter-market="us">السوق الأمريكي</button>
+                        </div>
+                        <div class="filter-actions" style="padding: 10px; text-align: center;">
+                            <button id="scan-btn" class="action-btn" style="width: 100%; padding: 8px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;">🔍 فحص الفرص</button>
+                        </div>
+                        <div class="fg-list-container">
+                            <div id="scan-results" class="fg-list">
+                                <div class="placeholder-text" style="padding: 20px; text-align: center; color: #666;">اضغط "فحص الفرص" للبدء</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- منطقة الرسم البياني (75%) -->
+                    <div class="fg-content">
+                        <div class="chart-wrapper">
+                            <canvas id="filter-chart"></canvas>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- نافذة تحديث البيانات -->
+    <div id="update-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>تحديث بيانات الأسهم</h2>
+                <button class="modal-close" id="close-modal">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <p class="modal-description">اختر السوق الذي تريد تحديث بياناته</p>
+                
+                <div class="update-options">
+                    <!-- خيار الأسهم السعودية -->
+                    <div class="update-option" id="update-saudi-btn">
+                        <div class="option-flag">
+                            <svg width="80" height="60" viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
+                                <rect width="900" height="600" fill="#165B2D"/>
+                                <g fill="#FFFFFF">
+                                    <text x="450" y="240" font-size="120" text-anchor="middle" font-family="Arial">🗡️</text>
+                                    <text x="450" y="380" font-size="80" text-anchor="middle" font-family="Arial">لا إله إلا الله محمد رسول الله</text>
+                                </g>
+                            </svg>
+                        </div>
+                        <h3>الأسهم السعودية</h3>
+                        <p class="option-count">243 سهم</p>
+                        <button class="update-btn saudi-btn">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 12a9 9 0 11-6.219-8.56"/>
+                            </svg>
+                            تحديث البيانات
+                        </button>
+                    </div>
+                    
+                    <!-- خيار الأسهم الأمريكية -->
+                    <div class="update-option" id="update-us-btn">
+                        <div class="option-flag">
+                            <svg width="80" height="60" viewBox="0 0 7410 3900" xmlns="http://www.w3.org/2000/svg">
+                                <rect width="7410" height="3900" fill="#B22234"/>
+                                <g fill="#FFF">
+                                    <rect width="7410" height="300" y="0"/>
+                                    <rect width="7410" height="300" y="600"/>
+                                    <rect width="7410" height="300" y="1200"/>
+                                    <rect width="7410" height="300" y="1800"/>
+                                    <rect width="7410" height="300" y="2400"/>
+                                    <rect width="7410" height="300" y="3000"/>
+                                    <rect width="7410" height="300" y="3600"/>
+                                </g>
+                                <rect width="2964" height="2100" fill="#3C3B6E"/>
+                                <g fill="#FFF">
+                                    <text x="1480" y="1000" font-size="900" text-anchor="middle" font-family="Arial">⭐</text>
+                                </g>
+                            </svg>
+                        </div>
+                        <h3>الأسهم الأمريكية</h3>
+                        <p class="option-count">507 سهم</p>
+                        <button class="update-btn us-btn">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 12a9 9 0 11-6.219-8.56"/>
+                            </svg>
+                            تحديث البيانات
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- منطقة التقدم -->
+                <div id="update-progress" class="update-progress" style="display: none;">
+                    <div class="progress-info">
+                        <span id="progress-status">جاري الاتصال...</span>
+                        <span id="progress-percent">0%</span>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div id="progress-bar" class="progress-bar"></div>
+                    </div>
+                    <div class="progress-stats">
+                        <div class="stat-item">
+                            <span class="stat-label">تم الجلب:</span>
+                            <span id="stat-new" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">تم التحديث:</span>
+                            <span id="stat-updated" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">محدث مسبقاً:</span>
+                            <span id="stat-uptodate" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">فشل:</span>
+                            <span id="stat-failed" class="stat-value">0</span>
+                        </div>
+                    </div>
+                    <div id="progress-message" class="progress-message"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js?v=81"></script>
+</body>
+</html>

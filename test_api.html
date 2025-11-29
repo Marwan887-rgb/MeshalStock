@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Market API</title>
+    <meta charset="UTF-8">
+</head>
+<body>
+    <h1>Testing Market Summary API</h1>
+    <button onclick="testAPI()">Test API</button>
+    <div id="result" style="white-space: pre; font-family: monospace;"></div>
+    
+    <script>
+        async function testAPI() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = 'جاري الاتصال...';
+            
+            try {
+                const response = await fetch('http://localhost:5000/api/market-summary');
+                const data = await response.json();
+                
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+                console.log('API Response:', data);
+            } catch (error) {
+                resultDiv.textContent = 'خطأ: ' + error.message;
+                console.error('Error:', error);
+            }
+        }
+        
+        // اختبار تلقائي عند تحميل الصفحة
+        window.addEventListener('load', testAPI);
+    </script>
+</body>
+</html>

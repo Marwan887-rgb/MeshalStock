@@ -476,54 +476,75 @@ def list_jobs():
 
 @app.route('/api/symbols/<market>', methods=['GET'])
 def get_symbols(market):
-    """جلب قائمة الرموز المتاحة من الملفات المحلية"""
+    """جلب قائمة الرموز المتاحة (Supabase first, CSV fallback)"""
     try:
-        symbols_map = {}
+        # Validate market
+        if market not in ['saudi', 'us']:
+            return jsonify({'error': 'Invalid market'}), 400
         
         # تحميل الأسماء العربية إذا كان السوق السعودي
+        symbols_map = {}
         if market == 'saudi':
-            directory = os.path.join(BASE_DIR, 'data_sa')
             try:
                 symbols_path = os.path.join(BASE_DIR, 'symbols_sa.txt')
                 if os.path.exists(symbols_path):
                     df_symbols = pd.read_csv(symbols_path)
-                    # تنظيف الأسماء والرموز
                     for _, row in df_symbols.iterrows():
-                        sym = str(row['Symbol']).strip()
+                        full_symbol = str(row['Symbol']).strip()
                         name = str(row['NameAr']).strip()
-                        symbols_map[sym] = name
+                        symbols_map[full_symbol] = name
+                        if full_symbol.endswith('.SR'):
+                            symbols_map[full_symbol.replace('.SR', '')] = name
             except Exception as e:
                 print(f"Error reading symbols_sa.txt: {e}")
-                
-        elif market == 'us':
-            directory = os.path.join(BASE_DIR, 'data_us')
-        else:
-            return jsonify({'error': 'Invalid market'}), 400
-            
+        
+        # Try Supabase first
+        if USE_SUPABASE:
+            try:
+                symbol_list = get_all_symbols(market)
+                if symbol_list:
+                    symbols = []
+                    for symbol in symbol_list:
+                        # Get name for Saudi stocks
+                        if market == 'saudi':
+                            clean_sym = symbol.replace('.SR', '')
+                            name = symbols_map.get(symbol, symbols_map.get(clean_sym, 'سهم سعودي'))
+                        else:
+                            name = symbol
+                        
+                        symbols.append({
+                            'symbol': symbol,
+                            'name': name
+                        })
+                    
+                    return jsonify({'symbols': symbols})
+            except Exception as e:
+                print(f"Supabase error in get_symbols, falling back to CSV: {e}")
+        
+        # Fallback to CSV
+        directory = os.path.join(BASE_DIR, 'data_sa' if market == 'saudi' else 'data_us')
+        
         if not os.path.exists(directory):
-            return jsonify({'error': f'Directory {directory} not found'}), 404
+            return jsonify({'symbols': []})  # Return empty list instead of error
             
         symbols = []
         for filename in os.listdir(directory):
             if filename.endswith('.csv'):
-                # إزالة الامتداد .csv
                 symbol = filename[:-4]
                 
-                # البحث عن الاسم العربي
-                name_ar = symbols_map.get(symbol, "")
-                if not name_ar and market == 'saudi':
-                     # محاولة البحث بدون .SR إذا لم يوجد
-                     clean_sym = symbol.replace('.SR', '')
-                     name_ar = symbols_map.get(clean_sym, "")
+                # Get name
+                if market == 'saudi':
+                    clean_sym = symbol.replace('.SR', '')
+                    name = symbols_map.get(symbol, symbols_map.get(clean_sym, 'سهم سعودي'))
+                else:
+                    name = symbol
                 
                 symbols.append({
                     'symbol': symbol,
-                    'name': name_ar if name_ar else (symbol if market == 'us' else 'سهم سعودي')
+                    'name': name
                 })
                 
-        # ترتيب القائمة
         symbols.sort(key=lambda x: x['symbol'])
-        
         return jsonify({'symbols': symbols})
         
     except Exception as e:
@@ -533,24 +554,21 @@ def get_symbols(market):
 
 @app.route('/api/history/<market>/<symbol>', methods=['GET'])
 def get_history(market, symbol):
-    """جلب البيانات التاريخية لسهم معين (آخر 6.5 أشهر)"""
+    """جلب البيانات التاريخية لسهم معين (آخر 6.5 أشهر) - Supabase first"""
     try:
-        if market == 'saudi':
-            directory = os.path.join(BASE_DIR, 'data_sa')
-        elif market == 'us':
-            directory = os.path.join(BASE_DIR, 'data_us')
-        else:
+        if market not in ['saudi', 'us']:
             return jsonify({'error': 'Invalid market'}), 400
-            
-        file_path = os.path.join(directory, f"{symbol}.csv")
         
-        if not os.path.exists(file_path):
-            return jsonify({'error': 'File not found'}), 404
-            
-        # قراءة ملف CSV
-        df = pd.read_csv(file_path)
+        # Use unified data source (Supabase first, CSV fallback)
+        df = get_stock_data_from_source(symbol, market)
+        
+        if df is None or len(df) == 0:
+            return jsonify({'error': 'No data found'}), 404
         
         # تحويل عمود التاريخ
+        if 'Date' not in df.columns:
+            df = df.reset_index()  # In case Date is index
+        
         df['Date'] = pd.to_datetime(df['Date'])
         
         # تحديد الفترة الزمنية (6 أشهر بالضبط)
@@ -561,8 +579,10 @@ def get_history(market, symbol):
         mask = (df['Date'] >= start_date) & (df['Date'] <= end_date)
         filtered_df = df.loc[mask].copy()
         
+        if len(filtered_df) == 0:
+            return jsonify({'error': 'No data in date range'}), 404
+        
         # تحويل البيانات إلى JSON
-        # نحتاج تحويل التاريخ إلى string
         filtered_df['Date'] = filtered_df['Date'].dt.strftime('%Y-%m-%d')
         
         result = filtered_df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].to_dict(orient='records')

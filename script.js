@@ -1960,7 +1960,7 @@ function convertToWeekly(dailyData) {
         weekly[weekKey].Volume += day.Volume;
     });
     
-    return Object.values(weekly).slice(-26); // آخر 26 أسبوع (6 أشهر)
+    return Object.values(weekly).slice(-52); // آخر 52 أسبوع (سنة كاملة للعرض)
 }
 
 function renderWeeklyChartData(symbol, data) {
@@ -1969,14 +1969,25 @@ function renderWeeklyChartData(symbol, data) {
     
     const ctx = canvas.getContext('2d');
     
+    // تحضير بيانات الشموع
     const ohlcData = data.map(d => ({
         x: new Date(d.Date).valueOf(),
         o: parseFloat(d.Open),
         h: parseFloat(d.High),
         l: parseFloat(d.Low),
-        c: parseFloat(d.Close),
-        v: parseFloat(d.Volume)
+        c: parseFloat(d.Close)
     }));
+    
+    // تحضير بيانات الحجم
+    const volumeData = data.map(d => ({
+        x: new Date(d.Date).valueOf(),
+        y: parseFloat(d.Volume)
+    }));
+    
+    // حساب لون الحجم بناءً على اتجاه السعر
+    const volumeColors = data.map(d => 
+        parseFloat(d.Close) >= parseFloat(d.Open) ? 'rgba(11, 61, 11, 0.5)' : 'rgba(183, 28, 28, 0.5)'
+    );
     
     if (charts['weekly-chart']) {
         charts['weekly-chart'].destroy();
@@ -1985,50 +1996,141 @@ function renderWeeklyChartData(symbol, data) {
     charts['weekly-chart'] = new Chart(ctx, {
         type: 'candlestick',
         data: {
-            datasets: [{
-                label: symbol,
-                data: ohlcData,
-                color: {
-                    up: '#0B3D0B',
-                    down: '#B71C1C',
-                    unchanged: '#666666'
+            datasets: [
+                // Dataset للشموع
+                {
+                    label: symbol,
+                    type: 'candlestick',
+                    data: ohlcData,
+                    yAxisID: 'y-price',
+                    color: {
+                        up: '#0B3D0B',
+                        down: '#B71C1C',
+                        unchanged: '#666666'
+                    },
+                    borderColor: {
+                        up: '#0B3D0B',
+                        down: '#B71C1C',
+                        unchanged: '#666666'
+                    }
                 },
-                borderColor: {
-                    up: '#0B3D0B',
-                    down: '#B71C1C',
-                    unchanged: '#666666'
+                // Dataset للحجم
+                {
+                    label: 'Volume',
+                    type: 'bar',
+                    data: volumeData,
+                    yAxisID: 'y-volume',
+                    backgroundColor: volumeColors,
+                    borderColor: volumeColors,
+                    borderWidth: 1,
+                    barThickness: 'flex',
+                    maxBarThickness: 8
                 }
-            }]
+            ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
             plugins: {
                 legend: { display: false },
                 title: {
                     display: true,
-                    text: `${symbol} - Weekly Chart (6 Months)`,
+                    text: `${symbol} - Weekly Chart (1 Year)`,
                     color: '#333',
-                    font: { size: 16 }
+                    font: { size: 16, weight: 'bold' }
+                },
+                tooltip: {
+                    enabled: true,
+                    mode: 'index',
+                    intersect: false,
+                    rtl: true,
+                    callbacks: {
+                        title: function(context) {
+                            const date = new Date(context[0].parsed.x);
+                            return date.toLocaleDateString('ar-SA');
+                        },
+                        label: function(context) {
+                            const dataset = context.dataset;
+                            if (dataset.type === 'candlestick') {
+                                const point = context.raw;
+                                return [
+                                    `الافتتاح: ${point.o.toFixed(2)}`,
+                                    `الأعلى: ${point.h.toFixed(2)}`,
+                                    `الأدنى: ${point.l.toFixed(2)}`,
+                                    `الإغلاق: ${point.c.toFixed(2)}`
+                                ];
+                            } else {
+                                return `الحجم: ${context.parsed.y.toLocaleString()}`;
+                            }
+                        }
+                    }
                 }
             },
             scales: {
                 x: {
                     type: 'time',
-                    time: { unit: 'week' },
-                    grid: { color: 'rgba(0, 0, 0, 0.1)' },
-                    ticks: { color: '#666' }
+                    time: { 
+                        unit: 'week',
+                        displayFormats: {
+                            week: 'MMM dd'
+                        }
+                    },
+                    grid: { 
+                        color: 'rgba(0, 0, 0, 0.05)',
+                        drawBorder: false
+                    },
+                    ticks: { 
+                        color: '#666',
+                        maxRotation: 0,
+                        autoSkip: true,
+                        maxTicksLimit: 12
+                    }
                 },
-                y: {
+                'y-price': {
+                    type: 'linear',
                     position: 'right',
-                    grid: { color: 'rgba(0, 0, 0, 0.1)' },
-                    ticks: { color: '#666' }
+                    grid: { 
+                        color: 'rgba(0, 0, 0, 0.05)',
+                        drawBorder: false
+                    },
+                    ticks: { 
+                        color: '#666',
+                        callback: function(value) {
+                            return value.toFixed(2);
+                        }
+                    },
+                    title: {
+                        display: true,
+                        text: 'السعر',
+                        color: '#333',
+                        font: { size: 12 }
+                    }
+                },
+                'y-volume': {
+                    type: 'linear',
+                    position: 'left',
+                    max: function(context) {
+                        // الحجم يأخذ 25% من المساحة السفلية
+                        const maxVolume = Math.max(...context.chart.data.datasets[1].data.map(d => d.y));
+                        return maxVolume * 4;
+                    },
+                    grid: { 
+                        display: false,
+                        drawBorder: false
+                    },
+                    ticks: { 
+                        display: false  // إخفاء أرقام الحجم لتوفير المساحة
+                    }
                 }
             }
         }
     });
     
-    console.log(`✅ Weekly chart rendered for ${symbol}`);
+    console.log(`✅ Weekly chart rendered for ${symbol} with volume`);
 }
 
 // تسجيل الخروج

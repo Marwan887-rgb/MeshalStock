@@ -1678,6 +1678,8 @@ document.querySelectorAll('.nav-item').forEach((item, index) => {
         if (fiboGannSection) fiboGannSection.style.display = 'none'; // تأكيد الإخفاء
         if (fiboFilterSection) fiboFilterSection.style.display = 'none';
         if (stockListSection) stockListSection.classList.add('section-hidden');
+        const weeklyFilterSection = document.getElementById('weekly-filter');
+        if (weeklyFilterSection) weeklyFilterSection.style.display = 'none';
         
         const text = this.querySelector('span').textContent.trim();
         
@@ -1724,9 +1726,94 @@ document.querySelectorAll('.nav-item').forEach((item, index) => {
                     if (window.resizeCharts) window.resizeCharts();
                 }, 350);
             }
+        } else if (text === 'فلترة أسبوعية') {
+            const weeklyFilterSection = document.getElementById('weekly-filter');
+            if (weeklyFilterSection) {
+                weeklyFilterSection.style.display = 'block';
+                document.body.classList.add('chart-view');
+                initWeeklyFilter();
+                setTimeout(() => {
+                    if (window.resizeCharts) window.resizeCharts();
+                }, 350);
+            }
         }
     });
 });
+
+// ========================================
+// الفلترة الأسبوعية (Weekly Filter)
+// ========================================
+
+let weeklyCurrentMarket = 'saudi';
+
+function initWeeklyFilter() {
+    console.log('Initializing weekly filter...');
+    
+    // تهيئة تبويبات السوق
+    const weeklyTabs = document.querySelectorAll('[data-weekly-market]');
+    weeklyTabs.forEach(tab => {
+        tab.addEventListener('click', function() {
+            weeklyTabs.forEach(t => t.classList.remove('active'));
+            this.classList.add('active');
+            weeklyCurrentMarket = this.dataset.weeklyMarket;
+            
+            // مسح النتائج عند تغيير السوق
+            const resultsDiv = document.getElementById('weekly-scan-results');
+            if (resultsDiv) {
+                resultsDiv.innerHTML = '<div class="placeholder-text" style="padding: 20px; text-align: center; color: #666;">اضغط "فحص أسبوعي" للبدء</div>';
+            }
+        });
+    });
+    
+    // زر الفحص
+    const weeklyScanBtn = document.getElementById('weekly-scan-btn');
+    if (weeklyScanBtn) {
+        weeklyScanBtn.addEventListener('click', function() {
+            performWeeklyScan(weeklyCurrentMarket);
+        });
+    }
+    
+    console.log('Weekly filter initialized successfully');
+}
+
+async function performWeeklyScan(market) {
+    const resultsDiv = document.getElementById('weekly-scan-results');
+    const scanBtn = document.getElementById('weekly-scan-btn');
+    
+    if (!resultsDiv) return;
+    
+    // عرض مؤشر تحميل
+    resultsDiv.innerHTML = '<div class="fg-loading" style="padding: 40px; text-align: center;"><div class="spinner"></div><p>جاري الفحص الأسبوعي...</p></div>';
+    
+    if (scanBtn) {
+        scanBtn.disabled = true;
+        scanBtn.textContent = '⏳ جاري الفحص...';
+    }
+    
+    try {
+        // TODO: استدعاء API للفحص الأسبوعي
+        // في الوقت الحالي، سنعرض رسالة تجريبية
+        
+        await new Promise(resolve => setTimeout(resolve, 1500)); // محاكاة تأخير الشبكة
+        
+        resultsDiv.innerHTML = `
+            <div style="padding: 20px; text-align: center;">
+                <h4 style="color: #2196F3; margin-bottom: 10px;">📊 الفحص الأسبوعي</h4>
+                <p style="color: #666; font-size: 14px;">هذه الميزة قيد التطوير</p>
+                <p style="color: #999; font-size: 12px; margin-top: 10px;">سيتم إضافة فحص المستويات الأسبوعية قريباً</p>
+            </div>
+        `;
+        
+    } catch (error) {
+        console.error('Error in weekly scan:', error);
+        resultsDiv.innerHTML = `<div style="padding: 20px; text-align: center; color: var(--danger);">حدث خطأ في الفحص</div>`;
+    } finally {
+        if (scanBtn) {
+            scanBtn.disabled = false;
+            scanBtn.textContent = '📊 فحص أسبوعي';
+        }
+    }
+}
 
 // تسجيل الخروج
 document.getElementById('logout-btn')?.addEventListener('click', function(e) {

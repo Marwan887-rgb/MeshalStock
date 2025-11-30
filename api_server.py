@@ -27,6 +27,16 @@ from dotenv import load_dotenv
 # تحميل المتغيرات البيئية
 load_dotenv()
 
+# Supabase client (optional - falls back to CSV if not configured)
+try:
+    from supabase_client import get_supabase_client, get_stock_data, get_all_symbols
+    USE_SUPABASE = bool(os.getenv('SUPABASE_KEY'))
+    if USE_SUPABASE:
+        print("✓ Supabase enabled - using database for faster performance")
+except Exception as e:
+    USE_SUPABASE = False
+    print(f"⚠ Supabase not available, using CSV files: {e}")
+
 app = Flask(__name__, static_url_path='', static_folder='.')
 
 # إعدادات التطبيق
@@ -842,6 +852,54 @@ def get_market_data(market):
         return jsonify({'error': str(e)}), 500
 
 
+def get_stock_data_from_source(symbol, market):
+    """
+    Get stock data from Supabase or CSV (fallback)
+    
+    Args:
+        symbol: Stock symbol
+        market: 'saudi' or 'us'
+    
+    Returns:
+        pandas DataFrame with columns: Date, Open, High, Low, Close, Volume
+    """
+    if USE_SUPABASE:
+        try:
+            # Get data from Supabase
+            data = get_stock_data(symbol, market)
+            if data and len(data) > 0:
+                df = pd.DataFrame(data)
+                df['Date'] = pd.to_datetime(df['date'])
+                df = df.rename(columns={
+                    'open': 'Open',
+                    'high': 'High',
+                    'low': 'Low',
+                    'close': 'Close',
+                    'volume': 'Volume'
+                })
+                df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+                df = df.sort_values('Date')
+                return df
+        except Exception as e:
+            print(f"Supabase error for {symbol}, falling back to CSV: {e}")
+    
+    # Fallback to CSV
+    if market == 'saudi':
+        directory = os.path.join(BASE_DIR, 'data_sa')
+    else:
+        directory = os.path.join(BASE_DIR, 'data_us')
+    
+    file_path = os.path.join(directory, f'{symbol}.csv')
+    
+    if os.path.exists(file_path):
+        df = pd.read_csv(file_path)
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.sort_values('Date')
+        return df
+    
+    return None
+
+
 @app.route('/api/scan/weekly/<market>', methods=['GET'])
 def weekly_scan(market):
     """
@@ -851,16 +909,9 @@ def weekly_scan(market):
     3. الحجم أكبر من الشمعة السابقة
     """
     try:
-        # تحديد المجلد
-        if market == 'saudi':
-            directory = os.path.join(BASE_DIR, 'data_sa')
-        elif market == 'us':
-            directory = os.path.join(BASE_DIR, 'data_us')
-        else:
+        # التحقق من السوق
+        if market not in ['saudi', 'us']:
             return jsonify({'error': 'Invalid market'}), 400
-        
-        if not os.path.exists(directory):
-            return jsonify({'error': f'Directory not found: {directory}'}), 404
         
         results = []
         total_stocks = 0
@@ -869,27 +920,34 @@ def weekly_scan(market):
         passed_peak = 0
         passed_volume = 0
         
+        # جلب قائمة الأسهم
+        if USE_SUPABASE:
+            try:
+                symbols = get_all_symbols(market)
+                print(f"Using Supabase: {len(symbols)} symbols from {market}")
+            except Exception as e:
+                print(f"Supabase error, falling back to CSV: {e}")
+                USE_SUPABASE = False
+        
+        if not USE_SUPABASE:
+            # Fallback to CSV
+            directory = os.path.join(BASE_DIR, 'data_sa' if market == 'saudi' else 'data_us')
+            if not os.path.exists(directory):
+                return jsonify({'error': f'Directory not found: {directory}'}), 404
+            symbols = [f[:-4] for f in os.listdir(directory) if f.endswith('.csv')]
+        
         # فحص كل سهم
-        for filename in os.listdir(directory):
+        for symbol in symbols:
             total_stocks += 1
-            if not filename.endswith('.csv'):
-                continue
-            
-            symbol = filename[:-4]
-            file_path = os.path.join(directory, filename)
             
             try:
-                # قراءة البيانات اليومية
-                df = pd.read_csv(file_path)
+                # قراءة البيانات اليومية من Supabase أو CSV
+                df = get_stock_data_from_source(symbol, market)
                 
-                if len(df) < 30:  # نحتاج بيانات كافية
+                if df is None or len(df) < 30:  # نحتاج بيانات كافية
                     continue
                 
-                # تحويل التاريخ
-                df['Date'] = pd.to_datetime(df['Date'])
-                df = df.sort_values('Date')
-                
-                # تحويل لبيانات أسبوعية
+                # تحويل لبيانات أسبوعية (Date already converted in helper function)
                 df.set_index('Date', inplace=True)
                 weekly = df.resample('W').agg({
                     'Open': 'first',

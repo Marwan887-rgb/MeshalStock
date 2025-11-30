@@ -596,41 +596,33 @@ def get_history(market, symbol):
 
 
 def calculate_levels(df):
-    """حساب مستويات جان وفيبوناتشي للسهم"""
+    """حساب مستويات جان وفيبوناتشي للسهم - محسّن"""
     try:
-        # تحويل التاريخ وتصفية آخر 6 أشهر
-        if 'Date' not in df.columns: return None
-        df['Date'] = pd.to_datetime(df['Date'])
+        # البيانات جاهزة مع Date column
+        if 'Date' not in df.columns or df.empty or len(df) < 10:
+            return None
         
-        if df.empty: return None
-        
-        end_date = df['Date'].max()
-        start_date = end_date - pd.DateOffset(months=6)
-        df_filtered = df[df['Date'] >= start_date].copy()
-        
-        if df_filtered.empty: return None
+        df_filtered = df.copy()
         
         # العثور على أقل قاع
-        min_low = df_filtered['Low'].min()
+        min_low = float(df_filtered['Low'].min())
         min_low_idx = df_filtered['Low'].idxmin()
         
-        # العثور على أول قمة بعد القاع
+        # العثور على أول قمة بعد القاع (محسّن)
+        df_subset = df_filtered.loc[min_low_idx:].copy()
+        
+        if len(df_subset) < 3:
+            return None
+        
+        # استخدام vectorized operation للعثور على القمة
+        highs = df_subset['High'].values
         peak_high = None
         
-        # نأخذ البيانات من بعد القاع
-        df_subset = df_filtered.loc[min_low_idx:].reset_index(drop=True)
-        
-        if len(df_subset) < 3: return None
-        
-        for i in range(1, len(df_subset) - 1):
-            curr = df_subset.iloc[i]['High']
-            prev = df_subset.iloc[i-1]['High']
-            next_val = df_subset.iloc[i+1]['High']
-            
-            if curr > prev and curr > next_val:
-                peak_high = curr
+        for i in range(1, len(highs) - 1):
+            if highs[i] > highs[i-1] and highs[i] > highs[i+1]:
+                peak_high = float(highs[i])
                 break
-                
+        
         if peak_high is None or peak_high <= min_low:
             return None
             
@@ -1223,6 +1215,22 @@ def weekly_scan(market):
         passed_peak = 0
         passed_volume = 0
         
+        # تحميل خريطة الأسماء للسوق السعودي
+        symbols_map = {}
+        if market == 'saudi':
+            try:
+                symbols_path = os.path.join(BASE_DIR, 'symbols_sa.txt')
+                if os.path.exists(symbols_path):
+                    df_sym = pd.read_csv(symbols_path)
+                    for _, row in df_sym.iterrows():
+                        full_symbol = str(row['Symbol']).strip()
+                        name = str(row['NameAr']).strip()
+                        symbols_map[full_symbol] = name
+                        if full_symbol.endswith('.SR'):
+                            symbols_map[full_symbol.replace('.SR', '')] = name
+            except Exception as e:
+                print(f"Warning: Could not load Saudi symbols: {e}")
+        
         # استعلام واحد لجميع بيانات السوق (آخر 6 أشهر)
         if USE_SUPABASE:
             try:
@@ -1365,9 +1373,15 @@ def weekly_scan(market):
                             max_prev_volume = max(prev_candle['Volume'], prev_prev_candle['Volume'])
                             volume_ratio = (last_candle['Volume'] / max_prev_volume) if max_prev_volume > 0 else 1
                             
+                            # الحصول على الاسم العربي للسوق السعودي
+                            stock_name = symbol
+                            if market == 'saudi':
+                                clean_sym = symbol.replace('.SR', '')
+                                stock_name = symbols_map.get(symbol, symbols_map.get(clean_sym, symbol))
+                            
                             results.append({
                                 'symbol': symbol,
-                                'name': symbol,
+                                'name': stock_name,
                                 'close': round(float(last_candle['Close']), 2),
                                 'open': round(float(last_candle['Open']), 2),
                                 'high': round(float(last_candle['High']), 2),

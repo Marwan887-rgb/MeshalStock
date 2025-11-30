@@ -1791,28 +1791,210 @@ async function performWeeklyScan(market) {
     }
     
     try {
-        // TODO: استدعاء API للفحص الأسبوعي
-        // في الوقت الحالي، سنعرض رسالة تجريبية
+        console.log(`Starting weekly scan for ${market} market...`);
         
-        await new Promise(resolve => setTimeout(resolve, 1500)); // محاكاة تأخير الشبكة
+        const response = await fetch(`${API_URL}/scan/weekly/${market}`);
+        const data = await response.json();
         
-        resultsDiv.innerHTML = `
-            <div style="padding: 20px; text-align: center;">
-                <h4 style="color: #2196F3; margin-bottom: 10px;">📊 الفحص الأسبوعي</h4>
-                <p style="color: #666; font-size: 14px;">هذه الميزة قيد التطوير</p>
-                <p style="color: #999; font-size: 12px; margin-top: 10px;">سيتم إضافة فحص المستويات الأسبوعية قريباً</p>
-            </div>
-        `;
+        console.log(`Weekly scan completed: ${data.count} results found`);
+        
+        if (data.error) {
+            throw new Error(data.error);
+        }
+        
+        if (!data.results || data.results.length === 0) {
+            resultsDiv.innerHTML = `
+                <div style="padding: 20px; text-align: center;">
+                    <p style="color: #666; font-size: 14px;">لا توجد أسهم مطابقة للشروط</p>
+                    <p style="color: #999; font-size: 12px; margin-top: 10px;">
+                        الشروط: شمعة خضراء + إغلاق عند القمة + حجم متزايد
+                    </p>
+                </div>
+            `;
+        } else {
+            renderWeeklyResults(data.results, market);
+        }
         
     } catch (error) {
         console.error('Error in weekly scan:', error);
-        resultsDiv.innerHTML = `<div style="padding: 20px; text-align: center; color: var(--danger);">حدث خطأ في الفحص</div>`;
+        resultsDiv.innerHTML = `<div style="padding: 20px; text-align: center; color: var(--danger);">خطأ: ${error.message}</div>`;
     } finally {
         if (scanBtn) {
             scanBtn.disabled = false;
             scanBtn.textContent = '📊 فحص أسبوعي';
         }
     }
+}
+
+function renderWeeklyResults(results, market) {
+    const container = document.getElementById('weekly-scan-results');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    results.forEach((item, index) => {
+        const div = document.createElement('div');
+        div.className = 'stock-item';
+        
+        const changeColor = item.change_percent > 0 ? 'green' : 'red';
+        
+        div.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; padding: 8px;">
+                <div>
+                    <span class="stock-symbol" style="font-weight:bold; color:#333">${item.symbol}</span>
+                    <span class="stock-name" style="font-size:0.85em; color:#666; display:block;">
+                        📊 ${item.close} | حجم: ${item.volume_ratio}x
+                    </span>
+                </div>
+                <div style="text-align:left">
+                    <span style="display:block; font-size:0.9em; color:${changeColor}; font-weight:bold">
+                        ${item.change_percent > 0 ? '+' : ''}${item.change_percent}%
+                    </span>
+                    <span style="font-size:0.75em; color:#999">عند القمة</span>
+                </div>
+            </div>
+        `;
+        
+        div.addEventListener('click', () => {
+            document.querySelectorAll('#weekly-scan-results .stock-item').forEach(i => i.classList.remove('active'));
+            div.classList.add('active');
+            loadWeeklyChart(market, item.symbol);
+        });
+        
+        container.appendChild(div);
+    });
+}
+
+async function loadWeeklyChart(market, symbol) {
+    const canvas = document.getElementById('weekly-chart');
+    if (!canvas) return;
+    
+    try {
+        console.log(`Loading weekly chart for ${symbol}...`);
+        
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.font = '20px Tajawal';
+        ctx.fillStyle = '#667eea';
+        ctx.textAlign = 'center';
+        ctx.fillText('جاري تحميل البيانات الأسبوعية...', canvas.width / 2, canvas.height / 2);
+        
+        // جلب البيانات اليومية
+        const response = await fetch(`${API_URL}/history/${market}/${symbol}`);
+        const dailyData = await response.json();
+        
+        if (dailyData.error) throw new Error(dailyData.error);
+        
+        // تحويل لبيانات أسبوعية في الـ frontend
+        const weeklyData = convertToWeekly(dailyData);
+        
+        // رسم الشارت
+        renderWeeklyChartData(symbol, weeklyData);
+        
+    } catch (error) {
+        console.error('Error loading weekly chart:', error);
+        alert(`فشل تحميل الشارت: ${error.message}`);
+    }
+}
+
+function convertToWeekly(dailyData) {
+    // تحويل البيانات اليومية إلى أسبوعية
+    const weekly = {};
+    
+    dailyData.forEach(day => {
+        const date = new Date(day.Date);
+        // الحصول على بداية الأسبوع (الأحد)
+        const weekStart = new Date(date);
+        weekStart.setDate(date.getDate() - date.getDay());
+        const weekKey = weekStart.toISOString().split('T')[0];
+        
+        if (!weekly[weekKey]) {
+            weekly[weekKey] = {
+                Date: weekKey,
+                Open: day.Open,
+                High: day.High,
+                Low: day.Low,
+                Close: day.Close,
+                Volume: 0
+            };
+        } else {
+            weekly[weekKey].High = Math.max(weekly[weekKey].High, day.High);
+            weekly[weekKey].Low = Math.min(weekly[weekKey].Low, day.Low);
+            weekly[weekKey].Close = day.Close; // آخر إغلاق
+        }
+        
+        weekly[weekKey].Volume += day.Volume;
+    });
+    
+    return Object.values(weekly).slice(-26); // آخر 26 أسبوع (6 أشهر)
+}
+
+function renderWeeklyChartData(symbol, data) {
+    const canvas = document.getElementById('weekly-chart');
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    
+    const ohlcData = data.map(d => ({
+        x: new Date(d.Date).valueOf(),
+        o: parseFloat(d.Open),
+        h: parseFloat(d.High),
+        l: parseFloat(d.Low),
+        c: parseFloat(d.Close),
+        v: parseFloat(d.Volume)
+    }));
+    
+    if (charts['weekly-chart']) {
+        charts['weekly-chart'].destroy();
+    }
+    
+    charts['weekly-chart'] = new Chart(ctx, {
+        type: 'candlestick',
+        data: {
+            datasets: [{
+                label: symbol,
+                data: ohlcData,
+                color: {
+                    up: '#0B3D0B',
+                    down: '#B71C1C',
+                    unchanged: '#666666'
+                },
+                borderColor: {
+                    up: '#0B3D0B',
+                    down: '#B71C1C',
+                    unchanged: '#666666'
+                }
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                title: {
+                    display: true,
+                    text: `${symbol} - Weekly Chart (6 Months)`,
+                    color: '#333',
+                    font: { size: 16 }
+                }
+            },
+            scales: {
+                x: {
+                    type: 'time',
+                    time: { unit: 'week' },
+                    grid: { color: 'rgba(0, 0, 0, 0.1)' },
+                    ticks: { color: '#666' }
+                },
+                y: {
+                    position: 'right',
+                    grid: { color: 'rgba(0, 0, 0, 0.1)' },
+                    ticks: { color: '#666' }
+                }
+            }
+        }
+    });
+    
+    console.log(`✅ Weekly chart rendered for ${symbol}`);
 }
 
 // تسجيل الخروج

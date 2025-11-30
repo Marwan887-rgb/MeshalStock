@@ -842,6 +842,128 @@ def get_market_data(market):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/scan/weekly/<market>', methods=['GET'])
+def weekly_scan(market):
+    """
+    فحص أسبوعي للأسهم بناءً على شروط محددة:
+    1. شمعة خضراء بإغلاق قريب من الأعلى
+    2. الإغلاق متجاوز أو على حدود قمة سابقة (6 أشهر)
+    3. الحجم أكبر من الشمعة السابقة
+    """
+    try:
+        # تحديد المجلد
+        if market == 'saudi':
+            directory = os.path.join(BASE_DIR, 'data_sa')
+        elif market == 'us':
+            directory = os.path.join(BASE_DIR, 'data_us')
+        else:
+            return jsonify({'error': 'Invalid market'}), 400
+        
+        if not os.path.exists(directory):
+            return jsonify({'error': f'Directory not found: {directory}'}), 404
+        
+        results = []
+        
+        # فحص كل سهم
+        for filename in os.listdir(directory):
+            if not filename.endswith('.csv'):
+                continue
+            
+            symbol = filename[:-4]
+            file_path = os.path.join(directory, filename)
+            
+            try:
+                # قراءة البيانات اليومية
+                df = pd.read_csv(file_path)
+                
+                if len(df) < 30:  # نحتاج بيانات كافية
+                    continue
+                
+                # تحويل التاريخ
+                df['Date'] = pd.to_datetime(df['Date'])
+                df = df.sort_values('Date')
+                
+                # تحويل لبيانات أسبوعية
+                df.set_index('Date', inplace=True)
+                weekly = df.resample('W').agg({
+                    'Open': 'first',
+                    'High': 'max',
+                    'Low': 'min',
+                    'Close': 'last',
+                    'Volume': 'sum'
+                }).dropna()
+                
+                if len(weekly) < 26:  # نحتاج 6 أشهر على الأقل (~26 أسبوع)
+                    continue
+                
+                # آخر شمعة أسبوعية
+                last_candle = weekly.iloc[-1]
+                prev_candle = weekly.iloc[-2]
+                
+                # الشرط 1: شمعة خضراء بإغلاق قريب من الأعلى
+                is_green = last_candle['Close'] > last_candle['Open']
+                body_size = abs(last_candle['Close'] - last_candle['Open'])
+                upper_shadow = last_candle['High'] - max(last_candle['Open'], last_candle['Close'])
+                
+                # الظل العلوي يجب أن يكون أقل من 30% من حجم الجسم
+                has_short_upper_shadow = upper_shadow < (body_size * 0.3)
+                
+                if not (is_green and has_short_upper_shadow):
+                    continue
+                
+                # الشرط 2: الإغلاق متجاوز أو على حدود قمة سابقة (6 أشهر)
+                last_6_months = weekly.iloc[-26:-1]  # آخر 26 أسبوع (6 أشهر) عدا الأخير
+                highest_in_6months = last_6_months['High'].max()
+                
+                # الإغلاق يجب أن يكون >= 98% من أعلى قمة
+                close_near_or_above_peak = last_candle['Close'] >= (highest_in_6months * 0.98)
+                
+                if not close_near_or_above_peak:
+                    continue
+                
+                # الشرط 3: الحجم أكبر من الشمعة السابقة
+                volume_increased = last_candle['Volume'] > prev_candle['Volume']
+                
+                if not volume_increased:
+                    continue
+                
+                # جميع الشروط تحققت!
+                volume_ratio = (last_candle['Volume'] / prev_candle['Volume']) if prev_candle['Volume'] > 0 else 1
+                
+                results.append({
+                    'symbol': symbol,
+                    'name': symbol,  # يمكن إضافة الأسماء لاحقاً
+                    'close': round(float(last_candle['Close']), 2),
+                    'open': round(float(last_candle['Open']), 2),
+                    'high': round(float(last_candle['High']), 2),
+                    'low': round(float(last_candle['Low']), 2),
+                    'volume': int(last_candle['Volume']),
+                    'prev_volume': int(prev_candle['Volume']),
+                    'volume_ratio': round(float(volume_ratio), 2),
+                    'highest_6m': round(float(highest_in_6months), 2),
+                    'change_percent': round(((last_candle['Close'] - last_candle['Open']) / last_candle['Open']) * 100, 2),
+                    'date': weekly.index[-1].strftime('%Y-%m-%d')
+                })
+                
+            except Exception as e:
+                print(f"Error processing {symbol}: {e}")
+                continue
+        
+        # ترتيب النتائج حسب نسبة التغيير
+        results.sort(key=lambda x: x['change_percent'], reverse=True)
+        
+        return jsonify({
+            'success': True,
+            'market': market,
+            'count': len(results),
+            'results': results
+        })
+        
+    except Exception as e:
+        print(f"Error in weekly scan: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     print("=" * 50)
     print("STARTING MESHALSTOCK API SERVER")
@@ -860,6 +982,7 @@ if __name__ == '__main__':
     print("  - GET  /api/symbols/<market>    Get symbols")
     print("  - GET  /api/history/<market>    Get history")
     print("  - GET  /api/scan/fibo_gann      Scan opportunities")
+    print("  - GET  /api/scan/weekly         Weekly scan")
     print("  - GET  /api/market-data         Market data")
     print("=" * 50)
     print(f"\n⚠️  SECURITY NOTES:")

@@ -736,6 +736,14 @@ def get_market_data(market):
         # الحصول على التاريخ المطلوب (اختياري)
         target_date = request.args.get('date', None)
         
+        # Try Supabase first
+        if USE_SUPABASE:
+            try:
+                return get_market_data_from_supabase(market, target_date)
+            except Exception as e:
+                print(f"Supabase error, falling back to CSV: {e}")
+        
+        # Fallback to CSV
         if market == 'saudi':
             directory = os.path.join(BASE_DIR, 'data_sa')
             # تحميل خريطة الأسماء
@@ -850,6 +858,112 @@ def get_market_data(market):
     except Exception as e:
         print(f"Error getting market data: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+def get_market_data_from_supabase(market, target_date=None):
+    """
+    Get market data from Supabase for stock list display
+    
+    Args:
+        market: 'saudi' or 'us'
+        target_date: Optional date filter (YYYY-MM-DD)
+    
+    Returns:
+        JSON response with data list
+    """
+    from supabase_client import get_supabase_client
+    
+    client = get_supabase_client()
+    if client is None:
+        raise Exception("Supabase client not available")
+    
+    # Get all symbols for this market
+    symbols = get_all_symbols(market)
+    
+    if not symbols:
+        return jsonify({'data': [], 'date': None, 'message': 'لا توجد رموز'})
+    
+    data_list = []
+    actual_date = None
+    
+    # Load symbol names for Saudi market
+    symbols_map = {}
+    if market == 'saudi':
+        try:
+            symbols_path = os.path.join(BASE_DIR, 'symbols_sa.txt')
+            if os.path.exists(symbols_path):
+                df_sym = pd.read_csv(symbols_path)
+                for _, row in df_sym.iterrows():
+                    symbols_map[str(row['Symbol']).strip()] = str(row['NameAr']).strip()
+        except: pass
+    
+    # Fetch data for each symbol
+    for symbol in symbols:
+        try:
+            # Get stock data
+            stock_data = get_stock_data(symbol, market)
+            
+            if not stock_data or len(stock_data) < 2:
+                continue
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(stock_data)
+            df['date'] = pd.to_datetime(df['date'])
+            df = df.sort_values('date')
+            
+            # Filter by date if specified
+            if target_date:
+                target_dt = pd.to_datetime(target_date)
+                df_filtered = df[df['date'] <= target_dt]
+                if len(df_filtered) == 0:
+                    continue
+                last_row = df_filtered.iloc[-1]
+                if len(df_filtered) > 1:
+                    prev_row = df_filtered.iloc[-2]
+                else:
+                    prev_row = last_row
+            else:
+                last_row = df.iloc[-1]
+                prev_row = df.iloc[-2]
+            
+            # Set actual date from first symbol
+            if actual_date is None:
+                actual_date = last_row['date'].strftime('%Y-%m-%d')
+            
+            # Calculate values
+            price = float(last_row['close'])
+            prev_close = float(prev_row['close'])
+            change = price - prev_close
+            change_pct = (change / prev_close) * 100 if prev_close != 0 else 0
+            volume = int(last_row['volume'])
+            
+            # Get symbol name
+            name = symbol
+            if market == 'saudi':
+                clean_sym = symbol.replace('.SR', '')
+                name = symbols_map.get(clean_sym, symbol)
+            
+            data_list.append({
+                'symbol': symbol,
+                'name': name,
+                'price': round(price, 2),
+                'change': round(change, 2),
+                'change_percent': round(change_pct, 2),
+                'volume': volume
+            })
+            
+        except Exception as e:
+            print(f"Error processing {symbol}: {e}")
+            continue
+    
+    if len(data_list) == 0:
+        return jsonify({'data': [], 'date': actual_date, 'message': 'لا توجد بيانات'})
+    
+    return jsonify({
+        'data': data_list,
+        'date': actual_date,
+        'count': len(data_list)
+    })
 
 
 def get_stock_data_from_source(symbol, market):

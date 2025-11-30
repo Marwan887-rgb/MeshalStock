@@ -662,6 +662,12 @@ def calculate_levels(df):
 def scan_fibo_gann():
     """فحص جميع الأسهم لاستخراج الفرص (اختراق أو ارتداد)"""
     market = request.args.get('market', 'saudi')
+    limit = request.args.get('limit', '100')  # Default: check first 100 stocks
+    
+    try:
+        limit = int(limit)
+    except:
+        limit = 100
     
     # تحميل خريطة الأسماء
     symbols_map = {}
@@ -695,8 +701,13 @@ def scan_fibo_gann():
         if not os.path.exists(directory):
             return jsonify({'results': []})
         symbols = [f[:-4] for f in os.listdir(directory) if f.endswith('.csv')]
+    
+    # Apply limit to avoid timeout
+    symbols = symbols[:limit]
+    print(f"Scanning {len(symbols)} stocks for fibo/gann levels...")
         
     results = []
+    processed = 0
     
     for symbol in symbols:
         try:
@@ -754,16 +765,24 @@ def scan_fibo_gann():
                     'reason': match_reason,
                     'level': match_level
                 })
+            
+            processed += 1
                 
         except Exception as e:
+            print(f"Error scanning {symbol}: {e}")
+            processed += 1
             continue
-            
-    return jsonify({'results': results})
+    
+    return jsonify({
+        'results': results,
+        'scanned': processed,
+        'total': len(symbols)
+    })
 
 
 @app.route('/api/market-data/<market>', methods=['GET'])
-def get_market_data(market):
-    """جلب بيانات السوق كاملة للعرض في الجدول"""
+def market_data(market):
+    """إرجاع بيانات السوق للعرض في قائمة الأسهم"""
     try:
         # الحصول على التاريخ المطلوب (اختياري)
         target_date = request.args.get('date', None)
@@ -1092,6 +1111,13 @@ def weekly_scan(market):
         if market not in ['saudi', 'us']:
             return jsonify({'error': 'Invalid market'}), 400
         
+        # Get limit parameter
+        limit = request.args.get('limit', '100')
+        try:
+            limit = int(limit)
+        except:
+            limit = 100
+        
         results = []
         total_stocks = 0
         passed_green = 0
@@ -1116,6 +1142,10 @@ def weekly_scan(market):
             if not os.path.exists(directory):
                 return jsonify({'error': f'Directory not found: {directory}'}), 404
             symbols = [f[:-4] for f in os.listdir(directory) if f.endswith('.csv')]
+        
+        # Apply limit to avoid timeout
+        symbols = symbols[:limit]
+        print(f"Scanning {len(symbols)} stocks for weekly patterns...")
         
         # فحص كل سهم
         for symbol in symbols:

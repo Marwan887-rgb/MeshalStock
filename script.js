@@ -1099,15 +1099,15 @@ function renderChart(symbol, data, canvasId = 'stock-chart') {
             if (!Chart.defaults.elements) Chart.defaults.elements = {};
             if (!Chart.defaults.elements.candlestick) Chart.defaults.elements.candlestick = {};
             
-            // تعيين الألوان
+            // تعيين الألوان (أخضر وأحمر غامقين)
             Chart.defaults.elements.candlestick.color = {
-                up: '#0B3D0B',
-                down: '#B71C1C',
+                up: '#006400',       // أخضر غامق (Dark Green)
+                down: '#8B0000',     // أحمر غامق (Dark Red)
                 unchanged: '#666666'
             };
             Chart.defaults.elements.candlestick.borderColor = {
-                up: '#0B3D0B',
-                down: '#B71C1C',
+                up: '#004D00',       // أخضر غامق جداً (حدود)
+                down: '#660000',     // أحمر غامق جداً (حدود)
                 unchanged: '#666666'
             };
             console.log('Chart defaults set successfully');

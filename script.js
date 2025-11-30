@@ -902,41 +902,15 @@ async function scanMarket(market) {
     const resultsContainer = document.getElementById('scan-results');
     if (!resultsContainer) return;
     
-    let allResults = [];
-    let offset = 0;
-    const batchSize = 200;
-    
-    resultsContainer.innerHTML = '<div class="fg-loading">جاري فحص السوق... (0/0)</div>';
+    resultsContainer.innerHTML = '<div class="fg-loading">جاري فحص السوق... قد يستغرق ذلك دقيقة</div>';
     
     try {
-        let hasMore = true;
+        const response = await fetch(`${API_URL}/scan/fibo_gann?market=${market}`);
+        const data = await response.json();
         
-        while (hasMore) {
-            const response = await fetch(`${API_URL}/scan/fibo_gann?market=${market}&offset=${offset}&batch_size=${batchSize}`);
-            const data = await response.json();
-            
-            if (data.results && data.results.length > 0) {
-                allResults = allResults.concat(data.results);
-                renderScanResults(allResults, market);
-            }
-            
-            // تحديث رسالة التقدم
-            if (data.has_more) {
-                resultsContainer.querySelector('.fg-loading')?.remove();
-                const loadingDiv = document.createElement('div');
-                loadingDiv.className = 'fg-loading';
-                loadingDiv.textContent = `جاري الفحص... (${data.progress})`;
-                resultsContainer.insertBefore(loadingDiv, resultsContainer.firstChild);
-                
-                offset = data.next_offset;
-                hasMore = true;
-            } else {
-                hasMore = false;
-                resultsContainer.querySelector('.fg-loading')?.remove();
-            }
-        }
-        
-        if (allResults.length === 0) {
+        if (data.results && data.results.length > 0) {
+            renderScanResults(data.results, market);
+        } else {
             resultsContainer.innerHTML = '<div class="placeholder-text">لا توجد فرص مطابقة حالياً</div>';
         }
     } catch (error) {
@@ -1842,12 +1816,8 @@ async function performWeeklyScan(market) {
     
     if (!resultsDiv) return;
     
-    let allResults = [];
-    let offset = 0;
-    const batchSize = 200;
-    
     // عرض مؤشر تحميل
-    resultsDiv.innerHTML = '<div class="fg-loading" style="padding: 40px; text-align: center;"><div class="spinner"></div><p>جاري الفحص الأسبوعي... (0/0)</p></div>';
+    resultsDiv.innerHTML = '<div class="fg-loading" style="padding: 40px; text-align: center;"><div class="spinner"></div><p>جاري الفحص الأسبوعي...</p></div>';
     
     if (scanBtn) {
         scanBtn.disabled = true;
@@ -1856,39 +1826,17 @@ async function performWeeklyScan(market) {
     
     try {
         console.log(`Starting weekly scan for ${market} market...`);
-        let hasMore = true;
         
-        while (hasMore) {
-            const response = await fetch(`${API_URL}/scan/weekly/${market}?offset=${offset}&batch_size=${batchSize}`);
-            const data = await response.json();
-            
-            if (data.error) {
-                throw new Error(data.error);
-            }
-            
-            if (data.results && data.results.length > 0) {
-                allResults = allResults.concat(data.results);
-                renderWeeklyResults(allResults, market);
-            }
-            
-            // تحديث رسالة التقدم
-            if (data.has_more) {
-                const loadingDiv = resultsDiv.querySelector('.fg-loading');
-                if (loadingDiv) {
-                    loadingDiv.querySelector('p').textContent = `جاري الفحص الأسبوعي... (${data.progress})`;
-                }
-                
-                offset = data.next_offset;
-                hasMore = true;
-            } else {
-                hasMore = false;
-                resultsDiv.querySelector('.fg-loading')?.remove();
-            }
+        const response = await fetch(`${API_URL}/scan/weekly/${market}`);
+        const data = await response.json();
+        
+        console.log(`Weekly scan completed: ${data.count} results found`);
+        
+        if (data.error) {
+            throw new Error(data.error);
         }
         
-        console.log(`Weekly scan completed: ${allResults.length} results found`);
-        
-        if (allResults.length === 0) {
+        if (!data.results || data.results.length === 0) {
             resultsDiv.innerHTML = `
                 <div style="padding: 20px; text-align: center;">
                     <p style="color: #666; font-size: 14px;">لا توجد أسهم مطابقة للشروط</p>
@@ -1897,6 +1845,8 @@ async function performWeeklyScan(market) {
                     </p>
                 </div>
             `;
+        } else {
+            renderWeeklyResults(data.results, market);
         }
         
     } catch (error) {

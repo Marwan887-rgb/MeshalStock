@@ -651,10 +651,8 @@ def calculate_levels(df):
 
 @app.route('/api/scan/fibo_gann', methods=['GET'])
 def scan_fibo_gann():
-    """فحص جميع الأسهم لاستخراج الفرص (اختراق أو ارتداد) - مع دعم التقسيم"""
+    """فحص جميع الأسهم لاستخراج الفرص (اختراق أو ارتداد) - محسّن للسرعة"""
     market = request.args.get('market', 'saudi')
-    offset = int(request.args.get('offset', 0))
-    batch_size = int(request.args.get('batch_size', 200))
     
     # تحميل خريطة الأسماء
     symbols_map = {}
@@ -681,8 +679,9 @@ def scan_fibo_gann():
             if client:
                 print(f"Fetching all {market} market data in one query...")
                 
-                # جلب آخر 6 أشهر لكلا السوقين
-                six_months_ago = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+                # جلب آخر 3 أشهر للأمريكي، 6 للسعودي (للسرعة)
+                days_back = 90 if market == 'us' else 180
+                months_ago = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
                 
                 # Supabase limit is 1000 by default, we need to handle pagination
                 all_data = []
@@ -693,7 +692,7 @@ def scan_fibo_gann():
                     result = client.table('stock_data')\
                         .select('symbol, date, open, high, low, close, volume')\
                         .eq('market', market)\
-                        .gte('date', six_months_ago)\
+                        .gte('date', months_ago)\
                         .order('symbol')\
                         .order('date')\
                         .range(offset, offset + limit - 1)\
@@ -721,15 +720,9 @@ def scan_fibo_gann():
                 
                 results = []
                 symbols = df_all['symbol'].unique()
-                total_symbols = len(symbols)
-                
-                # تطبيق offset و batch_size
-                batch_symbols = symbols[offset:offset + batch_size]
-                print(f"Processing batch: {offset} to {offset + len(batch_symbols)} of {total_symbols} symbols")
-                
                 processed = 0
                 
-                for symbol in batch_symbols:
+                for symbol in symbols:
                     try:
                         # استخراج بيانات السهم من DataFrame الكبير (سريع جداً!)
                         symbol_data = df_all[df_all['symbol'] == symbol].copy()
@@ -802,19 +795,11 @@ def scan_fibo_gann():
                         processed += 1
                         continue
                 
-                has_more = (offset + batch_size) < total_symbols
-                next_offset = offset + batch_size if has_more else total_symbols
-                
-                print(f"Batch complete: {processed} stocks scanned, {len(results)} opportunities found")
+                print(f"Scan complete: {processed} stocks scanned, {len(results)} opportunities found")
                 return jsonify({
                     'results': results,
                     'scanned': processed,
-                    'total': total_symbols,
-                    'offset': offset,
-                    'batch_size': batch_size,
-                    'has_more': has_more,
-                    'next_offset': next_offset,
-                    'progress': f"{min(offset + batch_size, total_symbols)}/{total_symbols}"
+                    'total': len(symbols)
                 })
         
         except Exception as e:
@@ -1213,7 +1198,7 @@ def get_stock_data_from_source(symbol, market):
 @app.route('/api/scan/weekly/<market>', methods=['GET'])
 def weekly_scan(market):
     """
-    فحص أسبوعي للأسهم بناءً على شروط محددة - مع دعم التقسيم
+    فحص أسبوعي للأسهم بناءً على شروط محددة - محسّن للسرعة
     1. شمعة خضراء بإغلاق قريب من الأعلى
     2. الإغلاق متجاوز أو على حدود قمة سابقة (6 أشهر)
     3. الحجم أكبر من الشمعة السابقة
@@ -1222,9 +1207,6 @@ def weekly_scan(market):
         # التحقق من السوق
         if market not in ['saudi', 'us']:
             return jsonify({'error': 'Invalid market'}), 400
-        
-        offset = int(request.args.get('offset', 0))
-        batch_size = int(request.args.get('batch_size', 200))
         
         results = []
         total_stocks = 0
@@ -1259,8 +1241,9 @@ def weekly_scan(market):
                 if client:
                     print(f"Fetching all {market} market data for weekly scan...")
                     
-                    # جلب آخر 6 أشهر لكلا السوقين
-                    six_months_ago = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+                    # جلب آخر 3 أشهر للأمريكي، 6 للسعودي (للسرعة)
+                    days_back = 90 if market == 'us' else 180
+                    months_ago = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
                     
                     all_data = []
                     limit = 1000
@@ -1270,7 +1253,7 @@ def weekly_scan(market):
                         result = client.table('stock_data')\
                             .select('symbol, date, open, high, low, close, volume')\
                             .eq('market', market)\
-                            .gte('date', six_months_ago)\
+                            .gte('date', months_ago)\
                             .order('symbol')\
                             .order('date')\
                             .range(offset, offset + limit - 1)\
@@ -1306,14 +1289,9 @@ def weekly_scan(market):
                     df_all = df_all.sort_values(['symbol', 'date'])
                     
                     symbols = df_all['symbol'].unique()
-                    total_symbols = len(symbols)
                     
-                    # تطبيق offset و batch_size
-                    batch_symbols = symbols[offset:offset + batch_size]
-                    print(f"Processing batch: {offset} to {offset + len(batch_symbols)} of {total_symbols} symbols")
-                    
-                    # فحص كل سهم في الـ batch
-                    for symbol in batch_symbols:
+                    # فحص كل سهم
+                    for symbol in symbols:
                         total_stocks += 1
                         
                         try:
@@ -1424,17 +1402,14 @@ def weekly_scan(market):
                     # ترتيب النتائج حسب نسبة التغيير
                     results.sort(key=lambda x: x['change_percent'], reverse=True)
                     
-                    has_more = (offset + batch_size) < total_symbols
-                    next_offset = offset + batch_size if has_more else total_symbols
-                    
                     # طباعة إحصائيات الفحص
-                    print(f"\n=== Weekly Batch Stats for {market.upper()} ===")
-                    print(f"Batch stocks checked: {total_stocks}")
+                    print(f"\n=== Weekly Scan Stats for {market.upper()} ===")
+                    print(f"Total stocks checked: {total_stocks}")
                     print(f"Passed green candle: {passed_green}")
                     print(f"Passed short shadow: {passed_shadow}")
                     print(f"Passed peak level: {passed_peak}")
                     print(f"Passed volume increase: {passed_volume}")
-                    print(f"Batch results: {len(results)}")
+                    print(f"Final results: {len(results)}")
                     print("=" * 40)
                     
                     return jsonify({
@@ -1448,13 +1423,7 @@ def weekly_scan(market):
                             'passed_shadow': passed_shadow,
                             'passed_peak': passed_peak,
                             'passed_volume': passed_volume
-                        },
-                        'offset': offset,
-                        'batch_size': batch_size,
-                        'has_more': has_more,
-                        'next_offset': next_offset,
-                        'total': total_symbols,
-                        'progress': f"{min(offset + batch_size, total_symbols)}/{total_symbols}"
+                        }
                     })
             
             except Exception as e:

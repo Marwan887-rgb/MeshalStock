@@ -1241,9 +1241,8 @@ def weekly_scan(market):
                 if client:
                     print(f"Fetching all {market} market data for weekly scan...")
                     
-                    # جلب آخر 3 أشهر للأمريكي، 6 للسعودي (للسرعة)
-                    days_back = 90 if market == 'us' else 180
-                    months_ago = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+                    # جلب 6 أشهر لكلا السوقين (الفلترة الأسبوعية تحتاج بيانات أكثر)
+                    six_months_ago = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
                     
                     all_data = []
                     limit = 1000
@@ -1253,7 +1252,7 @@ def weekly_scan(market):
                         result = client.table('stock_data')\
                             .select('symbol, date, open, high, low, close, volume')\
                             .eq('market', market)\
-                            .gte('date', months_ago)\
+                            .gte('date', six_months_ago)\
                             .order('symbol')\
                             .order('date')\
                             .range(offset, offset + limit - 1)\
@@ -1324,10 +1323,10 @@ def weekly_scan(market):
                             if len(weekly) < 26:  # نحتاج 6 أشهر على الأقل (~26 أسبوع)
                                 continue
                             
-                            # آخر شمعة أسبوعية
-                            last_candle = weekly.iloc[-1]
-                            prev_candle = weekly.iloc[-2]
-                            prev_prev_candle = weekly.iloc[-3]
+                            # استخدام الأسبوع قبل الأخير (المكتمل) بدلاً من الأخير (قد يكون غير مكتمل)
+                            last_candle = weekly.iloc[-2]  # الأسبوع المكتمل الأخير
+                            prev_candle = weekly.iloc[-3]
+                            prev_prev_candle = weekly.iloc[-4]
                             
                             # الشرط 1: شمعة خضراء بإغلاق قريب من الأعلى
                             is_green = last_candle['Close'] > last_candle['Open']
@@ -1351,7 +1350,7 @@ def weekly_scan(market):
                             passed_shadow += 1
                             
                             # الشرط 2: الإغلاق متجاوز أو على حدود قمة سابقة (6 أشهر)
-                            last_6_months = weekly.iloc[-26:-1]
+                            last_6_months = weekly.iloc[-27:-2]  # تعديل النطاق لأننا نستخدم -2 الآن
                             highest_in_6months = last_6_months['High'].max()
                             
                             close_near_or_above_peak = last_candle['Close'] >= (highest_in_6months * 0.98)

@@ -65,6 +65,7 @@ dist/
 *.tmp
 *.temp
 .cache/
+.data_fetch_in_progress
 
 # Data files (اختياري - احتفظ بالبيانات أو تجاهلها)
 data_sa/*.csv

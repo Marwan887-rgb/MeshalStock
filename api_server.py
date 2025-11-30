@@ -1035,6 +1035,19 @@ if __name__ == '__main__':
     print(f"   - Configure ALLOWED_ORIGINS for production")
     print("=" * 50)
     
+    # Initialize data if not present (background fetch)
+    try:
+        from initialize_data import initialize_data
+        print("\n🔍 Checking for data files...")
+        initialize_data(background=True)
+    except Exception as e:
+        print(f"⚠️  Could not initialize data: {e}")
+        print("You can manually update data from the web interface.")
+    
+    print("\n" + "=" * 50)
+    print("🚀 SERVER READY")
+    print("=" * 50)
+    
     # إعدادات التشغيل
     debug_mode = os.getenv('FLASK_DEBUG', 'False') == 'True'
     host = os.getenv('HOST', '0.0.0.0')

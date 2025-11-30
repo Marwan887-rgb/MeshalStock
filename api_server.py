@@ -1068,6 +1068,65 @@ def weekly_scan(market):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/test/supabase', methods=['GET'])
+def test_supabase():
+    """Test Supabase connection and data"""
+    try:
+        if not USE_SUPABASE:
+            return jsonify({
+                'supabase_enabled': False,
+                'message': 'Supabase is disabled, using CSV files'
+            })
+        
+        # Test get_all_symbols
+        us_symbols = get_all_symbols('us')
+        saudi_symbols = get_all_symbols('saudi')
+        
+        # Get sample data for WELL
+        well_data = get_stock_data('WELL', 'us')
+        well_latest = None
+        well_count = 0
+        if well_data:
+            well_count = len(well_data)
+            if well_count > 0:
+                well_latest = well_data[-1]['date']
+        
+        # Get sample data for last symbol
+        last_us = sorted(us_symbols)[-1] if us_symbols else None
+        last_data = get_stock_data(last_us, 'us') if last_us else None
+        last_latest = None
+        last_count = 0
+        if last_data:
+            last_count = len(last_data)
+            if last_count > 0:
+                last_latest = last_data[-1]['date']
+        
+        return jsonify({
+            'supabase_enabled': True,
+            'us_symbols_count': len(us_symbols),
+            'saudi_symbols_count': len(saudi_symbols),
+            'us_symbols_sample': us_symbols[:10] if us_symbols else [],
+            'us_last_10_symbols': sorted(us_symbols)[-10:] if us_symbols else [],
+            'well_test': {
+                'symbol': 'WELL',
+                'record_count': well_count,
+                'latest_date': well_latest
+            },
+            'last_symbol_test': {
+                'symbol': last_us,
+                'record_count': last_count,
+                'latest_date': last_latest
+            },
+            'message': 'Supabase is working correctly!'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'supabase_enabled': USE_SUPABASE
+        }), 500
+
+
 if __name__ == '__main__':
     print("=" * 50)
     print("STARTING MESHALSTOCK API SERVER")
@@ -1076,6 +1135,7 @@ if __name__ == '__main__':
     print(f"Server running at: http://{os.getenv('HOST', '0.0.0.0')}:{os.getenv('PORT', '5000')}")
     print("\nAvailable Endpoints:")
     print("  - GET  /api/health              Check health")
+    print("  - GET  /api/test/supabase       Test Supabase connection")
     print("  - POST /api/auth/login          Login (get token)")
     print("  - POST /api/auth/verify         Verify token")
     print("  - POST /api/fetch/saudi         Fetch Saudi data [AUTH]")

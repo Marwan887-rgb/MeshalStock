@@ -6,6 +6,14 @@ import argparse
 import sys
 from datetime import datetime, timedelta
 
+# Supabase integration (optional - falls back to CSV only)
+try:
+    from supabase_client import insert_stock_data_batch
+    USE_SUPABASE = True
+except ImportError:
+    USE_SUPABASE = False
+    print("⚠ Supabase not available, saving to CSV only")
+
 # --- الإعدادات ---
 # تحديد المجلد الأساسي بناءً على موقع الملف الحالي
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -99,6 +107,56 @@ def get_last_date_from_file(filepath, log):
         log(f"⚠️ خطأ في قراءة الملف {filepath}: {e}")
         return None
 
+def save_to_supabase(symbol, data, log):
+    """
+    حفظ البيانات في Supabase
+    
+    Args:
+        symbol: رمز السهم
+        data: DataFrame مع index = Date وأعمدة: Open, High, Low, Close, Volume
+        log: logging function
+    
+    Returns:
+        عدد السجلات المحفوظة أو 0 في حالة الفشل
+    """
+    if not USE_SUPABASE:
+        return 0
+    
+    try:
+        # تحويل DataFrame إلى قائمة من السجلات
+        records = []
+        for date_index, row in data.iterrows():
+            record = {
+                'symbol': symbol,
+                'market': 'saudi',
+                'date': date_index.strftime('%Y-%m-%d'),
+                'open': float(row['Open']) if 'Open' in row and pd.notna(row['Open']) else 0,
+                'high': float(row['High']) if 'High' in row and pd.notna(row['High']) else 0,
+                'low': float(row['Low']) if 'Low' in row and pd.notna(row['Low']) else 0,
+                'close': float(row['Close']) if 'Close' in row and pd.notna(row['Close']) else 0,
+                'volume': int(row['Volume']) if 'Volume' in row and pd.notna(row['Volume']) else 0
+            }
+            records.append(record)
+        
+        # رفع على Supabase (batch)
+        if records:
+            batch_size = 500
+            total_uploaded = 0
+            for i in range(0, len(records), batch_size):
+                batch = records[i:i + batch_size]
+                count = insert_stock_data_batch(batch)
+                total_uploaded += count
+            
+            log(f"[Supabase] تم رفع {total_uploaded} سجل")
+            return total_uploaded
+        
+        return 0
+        
+    except Exception as e:
+        log(f"[Supabase] تحذير: فشل الرفع على Supabase: {e}")
+        return 0
+
+
 def fetch_and_update_data(symbol, log):
     """
     جلب البيانات الجديدة وتحديث الملف.
@@ -186,11 +244,19 @@ def fetch_and_update_data(symbol, log):
             combined_data.to_csv(output_filename)
             log(f"[نجاح] تم تحديث الملف - أضيف {len(new_data)} صف جديد")
             log(f"[احصائية] إجمالي البيانات الآن: {len(combined_data)} صف")
+            
+            # حفظ في Supabase (البيانات الجديدة فقط)
+            save_to_supabase(symbol, new_data, log)
+            
             return 'updated'
         else:
             # ملف جديد: حفظ البيانات مباشرة
             new_data.to_csv(output_filename)
             log(f"[نجاح] تم إنشاء ملف جديد - {len(new_data)} صف")
+            
+            # حفظ في Supabase
+            save_to_supabase(symbol, new_data, log)
+            
             return 'new'
             
     except Exception as e:

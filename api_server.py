@@ -602,23 +602,22 @@ def calculate_levels(df):
         if 'Date' not in df.columns or df.empty or len(df) < 10:
             return None
         
-        df_filtered = df.copy()
-        
         # العثور على أقل قاع
-        min_low = float(df_filtered['Low'].min())
-        min_low_idx = df_filtered['Low'].idxmin()
+        min_low = float(df['Low'].min())
+        min_low_idx = df['Low'].idxmin()
         
         # العثور على أول قمة بعد القاع (محسّن)
-        df_subset = df_filtered.loc[min_low_idx:].copy()
+        df_subset = df.loc[min_low_idx:].copy()
         
         if len(df_subset) < 3:
             return None
         
-        # استخدام vectorized operation للعثور على القمة
+        # استخدام numpy للسرعة
         highs = df_subset['High'].values
         peak_high = None
         
-        for i in range(1, len(highs) - 1):
+        # البحث عن أول قمة محلية (محسّن)
+        for i in range(1, min(len(highs) - 1, 50)):  # limit search to first 50 bars
             if highs[i] > highs[i-1] and highs[i] > highs[i+1]:
                 peak_high = float(highs[i])
                 break
@@ -680,8 +679,9 @@ def scan_fibo_gann():
             if client:
                 print(f"Fetching all {market} market data in one query...")
                 
-                # جلب آخر 6 أشهر من البيانات دفعة واحدة
-                six_months_ago = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+                # جلب آخر 4-6 أشهر (4 للأمريكي، 6 للسعودي) للسرعة
+                days_back = 120 if market == 'us' else 180
+                months_ago = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
                 
                 # Supabase limit is 1000 by default, we need to handle pagination
                 all_data = []
@@ -692,7 +692,7 @@ def scan_fibo_gann():
                     result = client.table('stock_data')\
                         .select('symbol, date, open, high, low, close, volume')\
                         .eq('market', market)\
-                        .gte('date', six_months_ago)\
+                        .gte('date', months_ago)\
                         .order('symbol')\
                         .order('date')\
                         .range(offset, offset + limit - 1)\
@@ -1241,8 +1241,9 @@ def weekly_scan(market):
                 if client:
                     print(f"Fetching all {market} market data for weekly scan...")
                     
-                    # جلب آخر 6 أشهر من البيانات دفعة واحدة مع pagination
-                    six_months_ago = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+                    # جلب آخر 4-6 أشهر (4 للأمريكي، 6 للسعودي) للسرعة
+                    days_back = 120 if market == 'us' else 180
+                    months_ago = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
                     
                     all_data = []
                     limit = 1000
@@ -1252,7 +1253,7 @@ def weekly_scan(market):
                         result = client.table('stock_data')\
                             .select('symbol, date, open, high, low, close, volume')\
                             .eq('market', market)\
-                            .gte('date', six_months_ago)\
+                            .gte('date', months_ago)\
                             .order('symbol')\
                             .order('date')\
                             .range(offset, offset + limit - 1)\

@@ -660,14 +660,8 @@ def calculate_levels(df):
 
 @app.route('/api/scan/fibo_gann', methods=['GET'])
 def scan_fibo_gann():
-    """فحص جميع الأسهم لاستخراج الفرص (اختراق أو ارتداد)"""
+    """فحص جميع الأسهم لاستخراج الفرص (اختراق أو ارتداد) - محسّن للسرعة"""
     market = request.args.get('market', 'saudi')
-    limit = request.args.get('limit', '100')  # Default: check first 100 stocks
-    
-    try:
-        limit = int(limit)
-    except:
-        limit = 100
     
     # تحميل خريطة الأسماء
     symbols_map = {}
@@ -684,43 +678,162 @@ def scan_fibo_gann():
                         symbols_map[full_symbol.replace('.SR', '')] = name
         except: pass
     
-    # Get symbols list (Supabase first, CSV fallback)
-    use_db = USE_SUPABASE
-    
-    if use_db:
+    # استعلام واحد لجميع بيانات السوق (آخر 6 أشهر)
+    if USE_SUPABASE:
         try:
-            symbols = get_all_symbols(market)
-            print(f"Using Supabase: {len(symbols)} symbols from {market}")
-        except Exception as e:
-            print(f"Supabase error, falling back to CSV: {e}")
-            use_db = False
-    
-    if not use_db:
-        # Fallback to CSV
-        directory = os.path.join(BASE_DIR, 'data_sa' if market == 'saudi' else 'data_us')
-        if not os.path.exists(directory):
-            return jsonify({'results': []})
-        symbols = [f[:-4] for f in os.listdir(directory) if f.endswith('.csv')]
-    
-    # Apply limit to avoid timeout
-    symbols = symbols[:limit]
-    print(f"Scanning {len(symbols)} stocks for fibo/gann levels...")
+            from supabase_client import get_supabase_client
+            from datetime import datetime, timedelta
+            
+            client = get_supabase_client()
+            if client:
+                print(f"Fetching all {market} market data in one query...")
+                
+                # جلب آخر 6 أشهر من البيانات دفعة واحدة
+                six_months_ago = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+                
+                # Supabase limit is 1000 by default, we need to handle pagination
+                all_data = []
+                limit = 1000
+                offset = 0
+                
+                while True:
+                    result = client.table('stock_data')\
+                        .select('symbol, date, open, high, low, close, volume')\
+                        .eq('market', market)\
+                        .gte('date', six_months_ago)\
+                        .order('symbol')\
+                        .order('date')\
+                        .range(offset, offset + limit - 1)\
+                        .execute()
+                    
+                    if not result.data:
+                        break
+                    
+                    all_data.extend(result.data)
+                    
+                    if len(result.data) < limit:
+                        break
+                    
+                    offset += limit
+                
+                if not all_data:
+                    return jsonify({'results': [], 'scanned': 0, 'total': 0})
+                
+                print(f"Fetched {len(all_data)} records, processing...")
+                
+                # تحويل إلى DataFrame للمعالجة السريعة
+                df_all = pd.DataFrame(all_data)
+                df_all['date'] = pd.to_datetime(df_all['date'])
+                df_all = df_all.sort_values(['symbol', 'date'])
+                
+                results = []
+                symbols = df_all['symbol'].unique()
+                processed = 0
+                
+                for symbol in symbols:
+                    try:
+                        # استخراج بيانات السهم من DataFrame الكبير (سريع جداً!)
+                        symbol_data = df_all[df_all['symbol'] == symbol].copy()
+                        
+                        if len(symbol_data) < 10:
+                            continue
+                        
+                        # تحويل للصيغة المطلوبة
+                        symbol_data = symbol_data.rename(columns={
+                            'date': 'Date',
+                            'open': 'Open',
+                            'high': 'High',
+                            'low': 'Low',
+                            'close': 'Close',
+                            'volume': 'Volume'
+                        })
+                        
+                        levels = calculate_levels(symbol_data)
+                        
+                        if not levels:
+                            continue
+                        
+                        # فحص آخر شمعة
+                        last_candle = symbol_data.iloc[-1]
+                        open_p = last_candle['Open']
+                        close_p = last_candle['Close']
+                        high_p = last_candle['High']
+                        low_p = last_candle['Low']
+                        
+                        match = False
+                        match_reason = ""
+                        match_level = 0
+                        
+                        for level in levels:
+                            val = level['value']
+                            
+                            # الشرط الأساسي: الشمعة تلامس المستوى
+                            if low_p <= val <= high_p:
+                                # 1. اختراق
+                                if open_p < val < close_p:
+                                    match = True
+                                    match_reason = f"اختراق {level['type']}"
+                                    match_level = val
+                                    break
+                                # 2. ارتداد
+                                elif low_p <= val and close_p > val:
+                                    match = True
+                                    match_reason = f"ارتداد من {level['type']}"
+                                    match_level = val
+                                    break
+                        
+                        if match:
+                            name = symbols_map.get(symbol, symbol)
+                            if market == 'saudi':
+                                clean_sym = symbol.replace('.SR', '')
+                                name = symbols_map.get(clean_sym, name)
+                            
+                            results.append({
+                                'symbol': symbol,
+                                'name': name,
+                                'close': close_p,
+                                'reason': match_reason,
+                                'level': match_level
+                            })
+                        
+                        processed += 1
+                    
+                    except Exception as e:
+                        print(f"Error scanning {symbol}: {e}")
+                        processed += 1
+                        continue
+                
+                print(f"Scan complete: {processed} stocks scanned, {len(results)} opportunities found")
+                return jsonify({
+                    'results': results,
+                    'scanned': processed,
+                    'total': len(symbols)
+                })
         
+        except Exception as e:
+            print(f"Supabase scan error: {e}")
+            # سنفعّل fallback للـ CSV
+    
+    # Fallback to CSV (local only)
+    print("Using CSV fallback...")
+    directory = os.path.join(BASE_DIR, 'data_sa' if market == 'saudi' else 'data_us')
+    if not os.path.exists(directory):
+        return jsonify({'results': [], 'scanned': 0, 'total': 0})
+    
     results = []
+    symbols = [f[:-4] for f in os.listdir(directory) if f.endswith('.csv')]
     processed = 0
     
     for symbol in symbols:
         try:
-            # Use unified data source function
             df = get_stock_data_from_source(symbol, market)
             if df is None or len(df) == 0:
                 continue
             
             levels = calculate_levels(df)
+            if not levels:
+                continue
             
-            if not levels: continue
-            
-            # فحص آخر شمعة
             last_candle = df.iloc[-1]
             open_p = last_candle['Open']
             close_p = last_candle['Close']
@@ -733,19 +846,12 @@ def scan_fibo_gann():
             
             for level in levels:
                 val = level['value']
-                
-                # الشرط الأساسي: الشمعة تلامس المستوى (الهاي أعلى واللو أقل)
                 if low_p <= val <= high_p:
-                    
-                    # 1. اختراق (Breakout): الإغلاق فوق المستوى والافتتاح تحته
                     if open_p < val < close_p:
                         match = True
                         match_reason = f"اختراق {level['type']}"
                         match_level = val
                         break
-                        
-                    # 2. ارتداد (Bounce): هبط للمستوى (اللو أقل منه) لكن أغلق فوقه
-                    # يفضل أن يكون الافتتاح أيضاً فوقه ليكون ارتداد واضح، أو مجرد ذيل
                     elif low_p <= val and close_p > val:
                         match = True
                         match_reason = f"ارتداد من {level['type']}"
@@ -757,7 +863,7 @@ def scan_fibo_gann():
                 if market == 'saudi':
                     clean_sym = symbol.replace('.SR', '')
                     name = symbols_map.get(clean_sym, name)
-                    
+                
                 results.append({
                     'symbol': symbol,
                     'name': name,
@@ -767,7 +873,6 @@ def scan_fibo_gann():
                 })
             
             processed += 1
-                
         except Exception as e:
             print(f"Error scanning {symbol}: {e}")
             processed += 1
@@ -1101,7 +1206,7 @@ def get_stock_data_from_source(symbol, market):
 @app.route('/api/scan/weekly/<market>', methods=['GET'])
 def weekly_scan(market):
     """
-    فحص أسبوعي للأسهم بناءً على شروط محددة:
+    فحص أسبوعي للأسهم بناءً على شروط محددة - محسّن للسرعة
     1. شمعة خضراء بإغلاق قريب من الأعلى
     2. الإغلاق متجاوز أو على حدود قمة سابقة (6 أشهر)
     3. الحجم أكبر من الشمعة السابقة
@@ -1111,13 +1216,6 @@ def weekly_scan(market):
         if market not in ['saudi', 'us']:
             return jsonify({'error': 'Invalid market'}), 400
         
-        # Get limit parameter
-        limit = request.args.get('limit', '100')
-        try:
-            limit = int(limit)
-        except:
-            limit = 100
-        
         results = []
         total_stocks = 0
         passed_green = 0
@@ -1125,150 +1223,211 @@ def weekly_scan(market):
         passed_peak = 0
         passed_volume = 0
         
-        # جلب قائمة الأسهم
-        use_db = USE_SUPABASE  # Local variable for this request
-        
-        if use_db:
+        # استعلام واحد لجميع بيانات السوق (آخر 6 أشهر)
+        if USE_SUPABASE:
             try:
-                symbols = get_all_symbols(market)
-                print(f"Using Supabase: {len(symbols)} symbols from {market}")
-            except Exception as e:
-                print(f"Supabase error, falling back to CSV: {e}")
-                use_db = False
-        
-        if not use_db:
-            # Fallback to CSV
-            directory = os.path.join(BASE_DIR, 'data_sa' if market == 'saudi' else 'data_us')
-            if not os.path.exists(directory):
-                return jsonify({'error': f'Directory not found: {directory}'}), 404
-            symbols = [f[:-4] for f in os.listdir(directory) if f.endswith('.csv')]
-        
-        # Apply limit to avoid timeout
-        symbols = symbols[:limit]
-        print(f"Scanning {len(symbols)} stocks for weekly patterns...")
-        
-        # فحص كل سهم
-        for symbol in symbols:
-            total_stocks += 1
+                from supabase_client import get_supabase_client
+                from datetime import datetime, timedelta
+                
+                client = get_supabase_client()
+                if client:
+                    print(f"Fetching all {market} market data for weekly scan...")
+                    
+                    # جلب آخر 6 أشهر من البيانات دفعة واحدة مع pagination
+                    six_months_ago = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+                    
+                    all_data = []
+                    limit = 1000
+                    offset = 0
+                    
+                    while True:
+                        result = client.table('stock_data')\
+                            .select('symbol, date, open, high, low, close, volume')\
+                            .eq('market', market)\
+                            .gte('date', six_months_ago)\
+                            .order('symbol')\
+                            .order('date')\
+                            .range(offset, offset + limit - 1)\
+                            .execute()
+                        
+                        if not result.data:
+                            break
+                        
+                        all_data.extend(result.data)
+                        
+                        if len(result.data) < limit:
+                            break
+                        
+                        offset += limit
+                    
+                    if not all_data:
+                        return jsonify({
+                            'results': [],
+                            'stats': {
+                                'total_checked': 0,
+                                'passed_green': 0,
+                                'passed_shadow': 0,
+                                'passed_peak': 0,
+                                'passed_volume': 0
+                            }
+                        })
+                    
+                    print(f"Fetched {len(all_data)} records, processing weekly patterns...")
+                    
+                    # تحويل إلى DataFrame للمعالجة السريعة
+                    df_all = pd.DataFrame(all_data)
+                    df_all['date'] = pd.to_datetime(df_all['date'])
+                    df_all = df_all.sort_values(['symbol', 'date'])
+                    
+                    symbols = df_all['symbol'].unique()
+                    
+                    # فحص كل سهم
+                    for symbol in symbols:
+                        total_stocks += 1
+                        
+                        try:
+                            # استخراج بيانات السهم من DataFrame الكبير (سريع!)
+                            symbol_data = df_all[df_all['symbol'] == symbol].copy()
+                            
+                            if len(symbol_data) < 30:  # نحتاج بيانات كافية
+                                continue
+                            
+                            # تحويل لصيغة DataFrame المطلوبة
+                            symbol_data = symbol_data.rename(columns={
+                                'date': 'Date',
+                                'open': 'Open',
+                                'high': 'High',
+                                'low': 'Low',
+                                'close': 'Close',
+                                'volume': 'Volume'
+                            })
+                            
+                            # تحويل لبيانات أسبوعية
+                            symbol_data.set_index('Date', inplace=True)
+                            weekly = symbol_data.resample('W').agg({
+                                'Open': 'first',
+                                'High': 'max',
+                                'Low': 'min',
+                                'Close': 'last',
+                                'Volume': 'sum'
+                            }).dropna()
+                            
+                            if len(weekly) < 26:  # نحتاج 6 أشهر على الأقل (~26 أسبوع)
+                                continue
+                            
+                            # آخر شمعة أسبوعية
+                            last_candle = weekly.iloc[-1]
+                            prev_candle = weekly.iloc[-2]
+                            prev_prev_candle = weekly.iloc[-3]
+                            
+                            # الشرط 1: شمعة خضراء بإغلاق قريب من الأعلى
+                            is_green = last_candle['Close'] > last_candle['Open']
+                            
+                            if not is_green:
+                                continue
+                            
+                            passed_green += 1
+                            
+                            body_size = abs(last_candle['Close'] - last_candle['Open'])
+                            upper_shadow = last_candle['High'] - max(last_candle['Open'], last_candle['Close'])
+                            
+                            if body_size > 0:
+                                has_short_upper_shadow = upper_shadow < (body_size * 0.3)
+                            else:
+                                has_short_upper_shadow = upper_shadow < 0.01
+                            
+                            if not has_short_upper_shadow:
+                                continue
+                            
+                            passed_shadow += 1
+                            
+                            # الشرط 2: الإغلاق متجاوز أو على حدود قمة سابقة (6 أشهر)
+                            last_6_months = weekly.iloc[-26:-1]
+                            highest_in_6months = last_6_months['High'].max()
+                            
+                            close_near_or_above_peak = last_candle['Close'] >= (highest_in_6months * 0.98)
+                            
+                            if not close_near_or_above_peak:
+                                continue
+                            
+                            passed_peak += 1
+                            
+                            # الشرط 3: الحجم أكبر من أي من الشمعتين السابقتين
+                            volume_increased = (last_candle['Volume'] > prev_candle['Volume']) or \
+                                               (last_candle['Volume'] > prev_prev_candle['Volume'])
+                            
+                            if not volume_increased:
+                                continue
+                            
+                            passed_volume += 1
+                            
+                            # جميع الشروط تحققت!
+                            max_prev_volume = max(prev_candle['Volume'], prev_prev_candle['Volume'])
+                            volume_ratio = (last_candle['Volume'] / max_prev_volume) if max_prev_volume > 0 else 1
+                            
+                            results.append({
+                                'symbol': symbol,
+                                'name': symbol,
+                                'close': round(float(last_candle['Close']), 2),
+                                'open': round(float(last_candle['Open']), 2),
+                                'high': round(float(last_candle['High']), 2),
+                                'low': round(float(last_candle['Low']), 2),
+                                'volume': int(last_candle['Volume']),
+                                'prev_volume': int(max_prev_volume),
+                                'volume_ratio': round(float(volume_ratio), 2),
+                                'highest_6m': round(float(highest_in_6months), 2),
+                                'change_percent': round(((last_candle['Close'] - last_candle['Open']) / last_candle['Open']) * 100, 2),
+                                'date': weekly.index[-1].strftime('%Y-%m-%d')
+                            })
+                            
+                        except Exception as e:
+                            print(f"Error processing {symbol}: {e}")
+                            continue
+                    
+                    # ترتيب النتائج حسب نسبة التغيير
+                    results.sort(key=lambda x: x['change_percent'], reverse=True)
+                    
+                    # طباعة إحصائيات الفحص
+                    print(f"\n=== Weekly Scan Stats for {market.upper()} ===")
+                    print(f"Total stocks checked: {total_stocks}")
+                    print(f"Passed green candle: {passed_green}")
+                    print(f"Passed short shadow: {passed_shadow}")
+                    print(f"Passed peak level: {passed_peak}")
+                    print(f"Passed volume increase: {passed_volume}")
+                    print(f"Final results: {len(results)}")
+                    print("=" * 40)
+                    
+                    return jsonify({
+                        'success': True,
+                        'market': market,
+                        'count': len(results),
+                        'results': results,
+                        'stats': {
+                            'total_checked': total_stocks,
+                            'passed_green': passed_green,
+                            'passed_shadow': passed_shadow,
+                            'passed_peak': passed_peak,
+                            'passed_volume': passed_volume
+                        }
+                    })
             
-            try:
-                # قراءة البيانات اليومية من Supabase أو CSV
-                df = get_stock_data_from_source(symbol, market)
-                
-                if df is None or len(df) < 30:  # نحتاج بيانات كافية
-                    continue
-                
-                # تحويل لبيانات أسبوعية (Date already converted in helper function)
-                df.set_index('Date', inplace=True)
-                weekly = df.resample('W').agg({
-                    'Open': 'first',
-                    'High': 'max',
-                    'Low': 'min',
-                    'Close': 'last',
-                    'Volume': 'sum'
-                }).dropna()
-                
-                if len(weekly) < 26:  # نحتاج 6 أشهر على الأقل (~26 أسبوع)
-                    continue
-                
-                # آخر شمعة أسبوعية
-                last_candle = weekly.iloc[-1]
-                prev_candle = weekly.iloc[-2]
-                prev_prev_candle = weekly.iloc[-3]  # الشمعة قبل السابقة
-                
-                # الشرط 1: شمعة خضراء بإغلاق قريب من الأعلى
-                is_green = last_candle['Close'] > last_candle['Open']
-                
-                if not is_green:
-                    continue
-                
-                passed_green += 1
-                
-                body_size = abs(last_candle['Close'] - last_candle['Open'])
-                upper_shadow = last_candle['High'] - max(last_candle['Open'], last_candle['Close'])
-                
-                # الظل العلوي يجب أن يكون أقل من 30% من حجم الجسم
-                # تجنب القسمة على صفر إذا كان الجسم صغير جداً
-                if body_size > 0:
-                    has_short_upper_shadow = upper_shadow < (body_size * 0.3)
-                else:
-                    # إذا كان الجسم = 0 (doji)، نتحقق من الظل فقط
-                    has_short_upper_shadow = upper_shadow < 0.01
-                
-                if not has_short_upper_shadow:
-                    continue
-                
-                passed_shadow += 1
-                
-                # الشرط 2: الإغلاق متجاوز أو على حدود قمة سابقة (6 أشهر)
-                last_6_months = weekly.iloc[-26:-1]  # آخر 26 أسبوع (6 أشهر) عدا الأخير
-                highest_in_6months = last_6_months['High'].max()
-                
-                # الإغلاق يجب أن يكون >= 98% من أعلى قمة
-                close_near_or_above_peak = last_candle['Close'] >= (highest_in_6months * 0.98)
-                
-                if not close_near_or_above_peak:
-                    continue
-                
-                passed_peak += 1
-                
-                # الشرط 3: الحجم أكبر من أي من الشمعتين السابقتين
-                volume_increased = (last_candle['Volume'] > prev_candle['Volume']) or \
-                                   (last_candle['Volume'] > prev_prev_candle['Volume'])
-                
-                if not volume_increased:
-                    continue
-                
-                passed_volume += 1
-                
-                # جميع الشروط تحققت!
-                # حساب نسبة الحجم مقارنة بأعلى من الشمعتين السابقتين
-                max_prev_volume = max(prev_candle['Volume'], prev_prev_candle['Volume'])
-                volume_ratio = (last_candle['Volume'] / max_prev_volume) if max_prev_volume > 0 else 1
-                
-                results.append({
-                    'symbol': symbol,
-                    'name': symbol,  # يمكن إضافة الأسماء لاحقاً
-                    'close': round(float(last_candle['Close']), 2),
-                    'open': round(float(last_candle['Open']), 2),
-                    'high': round(float(last_candle['High']), 2),
-                    'low': round(float(last_candle['Low']), 2),
-                    'volume': int(last_candle['Volume']),
-                    'prev_volume': int(max_prev_volume),
-                    'volume_ratio': round(float(volume_ratio), 2),
-                    'highest_6m': round(float(highest_in_6months), 2),
-                    'change_percent': round(((last_candle['Close'] - last_candle['Open']) / last_candle['Open']) * 100, 2),
-                    'date': weekly.index[-1].strftime('%Y-%m-%d')
-                })
-                
             except Exception as e:
-                print(f"Error processing {symbol}: {e}")
-                continue
+                print(f"Supabase weekly scan error: {e}")
+                # Fall back to CSV method
         
-        # ترتيب النتائج حسب نسبة التغيير
-        results.sort(key=lambda x: x['change_percent'], reverse=True)
-        
-        # طباعة إحصائيات الفحص
-        print(f"\n=== Weekly Scan Stats for {market.upper()} ===")
-        print(f"Total stocks checked: {total_stocks}")
-        print(f"Passed green candle: {passed_green}")
-        print(f"Passed short shadow: {passed_shadow}")
-        print(f"Passed peak level: {passed_peak}")
-        print(f"Passed volume increase: {passed_volume}")
-        print(f"Final results: {len(results)}")
-        print("=" * 40)
-        
+        # CSV Fallback (for local development)
+        print("Using CSV fallback for weekly scan...")
+        # Return empty for now as CSV won't be available on Render
         return jsonify({
-            'success': True,
-            'market': market,
-            'count': len(results),
-            'results': results,
+            'success': False,
+            'error': 'Supabase connection failed',
+            'results': [],
             'stats': {
-                'total_checked': total_stocks,
-                'passed_green': passed_green,
-                'passed_shadow': passed_shadow,
-                'passed_peak': passed_peak,
-                'passed_volume': passed_volume
+                'total_checked': 0,
+                'passed_green': 0,
+                'passed_shadow': 0,
+                'passed_peak': 0,
+                'passed_volume': 0
             }
         })
         

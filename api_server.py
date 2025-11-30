@@ -905,6 +905,7 @@ def weekly_scan(market):
                 # آخر شمعة أسبوعية
                 last_candle = weekly.iloc[-1]
                 prev_candle = weekly.iloc[-2]
+                prev_prev_candle = weekly.iloc[-3]  # الشمعة قبل السابقة
                 
                 # الشرط 1: شمعة خضراء بإغلاق قريب من الأعلى
                 is_green = last_candle['Close'] > last_candle['Open']
@@ -942,8 +943,9 @@ def weekly_scan(market):
                 
                 passed_peak += 1
                 
-                # الشرط 3: الحجم أكبر من الشمعة السابقة
-                volume_increased = last_candle['Volume'] > prev_candle['Volume']
+                # الشرط 3: الحجم أكبر من أي من الشمعتين السابقتين
+                volume_increased = (last_candle['Volume'] > prev_candle['Volume']) or \
+                                   (last_candle['Volume'] > prev_prev_candle['Volume'])
                 
                 if not volume_increased:
                     continue
@@ -951,7 +953,9 @@ def weekly_scan(market):
                 passed_volume += 1
                 
                 # جميع الشروط تحققت!
-                volume_ratio = (last_candle['Volume'] / prev_candle['Volume']) if prev_candle['Volume'] > 0 else 1
+                # حساب نسبة الحجم مقارنة بأعلى من الشمعتين السابقتين
+                max_prev_volume = max(prev_candle['Volume'], prev_prev_candle['Volume'])
+                volume_ratio = (last_candle['Volume'] / max_prev_volume) if max_prev_volume > 0 else 1
                 
                 results.append({
                     'symbol': symbol,
@@ -961,7 +965,7 @@ def weekly_scan(market):
                     'high': round(float(last_candle['High']), 2),
                     'low': round(float(last_candle['Low']), 2),
                     'volume': int(last_candle['Volume']),
-                    'prev_volume': int(prev_candle['Volume']),
+                    'prev_volume': int(max_prev_volume),
                     'volume_ratio': round(float(volume_ratio), 2),
                     'highest_6m': round(float(highest_in_6months), 2),
                     'change_percent': round(((last_candle['Close'] - last_candle['Open']) / last_candle['Open']) * 100, 2),

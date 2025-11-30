@@ -863,6 +863,7 @@ def get_market_data(market):
 def get_market_data_from_supabase(market, target_date=None):
     """
     Get market data from Supabase for stock list display
+    Fast version: Uses SQL aggregation to get latest data for all symbols
     
     Args:
         market: 'saudi' or 'us'
@@ -877,15 +878,6 @@ def get_market_data_from_supabase(market, target_date=None):
     if client is None:
         raise Exception("Supabase client not available")
     
-    # Get all symbols for this market
-    symbols = get_all_symbols(market)
-    
-    if not symbols:
-        return jsonify({'data': [], 'date': None, 'message': 'لا توجد رموز'})
-    
-    data_list = []
-    actual_date = None
-    
     # Load symbol names for Saudi market
     symbols_map = {}
     if market == 'saudi':
@@ -897,71 +889,104 @@ def get_market_data_from_supabase(market, target_date=None):
                     symbols_map[str(row['Symbol']).strip()] = str(row['NameAr']).strip()
         except: pass
     
-    # Fetch data for each symbol
-    for symbol in symbols:
-        try:
-            # Get stock data
-            stock_data = get_stock_data(symbol, market)
-            
-            if not stock_data or len(stock_data) < 2:
-                continue
-            
-            # Convert to DataFrame
-            df = pd.DataFrame(stock_data)
-            df['date'] = pd.to_datetime(df['date'])
-            df = df.sort_values('date')
-            
-            # Filter by date if specified
-            if target_date:
-                target_dt = pd.to_datetime(target_date)
-                df_filtered = df[df['date'] <= target_dt]
-                if len(df_filtered) == 0:
-                    continue
-                last_row = df_filtered.iloc[-1]
-                if len(df_filtered) > 1:
-                    prev_row = df_filtered.iloc[-2]
-                else:
-                    prev_row = last_row
-            else:
-                last_row = df.iloc[-1]
-                prev_row = df.iloc[-2]
-            
-            # Set actual date from first symbol
-            if actual_date is None:
-                actual_date = last_row['date'].strftime('%Y-%m-%d')
-            
-            # Calculate values
-            price = float(last_row['close'])
-            prev_close = float(prev_row['close'])
-            change = price - prev_close
-            change_pct = (change / prev_close) * 100 if prev_close != 0 else 0
-            volume = int(last_row['volume'])
-            
-            # Get symbol name
-            name = symbol
-            if market == 'saudi':
-                clean_sym = symbol.replace('.SR', '')
-                name = symbols_map.get(clean_sym, symbol)
-            
-            data_list.append({
-                'symbol': symbol,
-                'name': name,
-                'price': round(price, 2),
-                'change': round(change, 2),
-                'change_percent': round(change_pct, 2),
-                'volume': volume
-            })
-            
-        except Exception as e:
-            print(f"Error processing {symbol}: {e}")
-            continue
+    # Use efficient Python aggregation - fetch all data once, process in memory
+    return get_market_data_from_supabase_fallback(client, market, target_date, symbols_map)
+
+
+def get_market_data_from_supabase_fallback(client, market, target_date, symbols_map):
+    """
+    Efficient method: Fetch recent data for all symbols at once
+    Only gets last few dates (not all history) to minimize data transfer
+    """
     
-    if len(data_list) == 0:
-        return jsonify({'data': [], 'date': actual_date, 'message': 'لا توجد بيانات'})
+    # Strategy: Get recent dates for the market, then process
+    # This is much faster than querying each symbol separately
+    
+    # First, determine what dates to fetch
+    if target_date:
+        # Get data up to target date
+        date_query = client.table('stock_data')\
+            .select('date')\
+            .eq('market', market)\
+            .lte('date', target_date)\
+            .order('date', desc=True)\
+            .limit(500)
+    else:
+        # Get recent dates
+        date_query = client.table('stock_data')\
+            .select('date')\
+            .eq('market', market)\
+            .order('date', desc=True)\
+            .limit(500)
+    
+    date_result = date_query.execute()
+    
+    if not date_result.data or len(date_result.data) == 0:
+        return jsonify({'data': [], 'date': None, 'message': 'لا توجد بيانات'})
+    
+    # Get unique dates and take last 5 (enough for latest + previous)
+    unique_dates = sorted(list(set([r['date'] for r in date_result.data])), reverse=True)[:5]
+    
+    if not unique_dates:
+        return jsonify({'data': [], 'date': None, 'message': 'لا توجد تواريخ'})
+    
+    latest_date = unique_dates[0]
+    
+    # Fetch data for these dates only (much smaller dataset)
+    data_query = client.table('stock_data')\
+        .select('symbol, date, close, volume')\
+        .eq('market', market)\
+        .in_('date', unique_dates)\
+        .order('symbol')\
+        .order('date', desc=True)
+    
+    result = data_query.execute()
+    
+    if not result.data:
+        return jsonify({'data': [], 'date': None, 'message': 'لا توجد بيانات'})
+    
+    # Process data efficiently
+    df = pd.DataFrame(result.data)
+    df['date'] = pd.to_datetime(df['date'])
+    
+    data_list = []
+    
+    for symbol in df['symbol'].unique():
+        symbol_df = df[df['symbol'] == symbol].sort_values('date', ascending=False)
+        
+        if len(symbol_df) < 1:
+            continue
+        
+        # Latest data
+        last_row = symbol_df.iloc[0]
+        # Previous data
+        prev_row = symbol_df.iloc[1] if len(symbol_df) > 1 else last_row
+        
+        close = float(last_row['close'])
+        prev_close = float(prev_row['close'])
+        volume = int(last_row['volume'])
+        
+        change = close - prev_close
+        change_pct = (change / prev_close) * 100 if prev_close != 0 else 0
+        
+        # Get symbol name
+        name = symbol
+        if market == 'saudi':
+            clean_sym = symbol.replace('.SR', '')
+            name = symbols_map.get(clean_sym, symbol)
+        
+        data_list.append({
+            'symbol': symbol,
+            'name': name,
+            'price': round(close, 2),
+            'change': round(change, 2),
+            'change_percent': round(change_pct, 2),
+            'volume': volume
+        })
     
     return jsonify({
         'data': data_list,
-        'date': actual_date,
+        'date': latest_date,
         'count': len(data_list)
     })
 

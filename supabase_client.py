@@ -205,11 +205,32 @@ def get_all_symbols(market):
         if client is None:
             return []
         
-        result = client.table('stock_data').select('symbol').eq('market', market).execute()
+        # Use RPC or pagination to get all unique symbols
+        # Method 1: Get all with large limit and pagination
+        all_symbols = set()
+        page_size = 1000
+        offset = 0
         
-        # Get unique symbols
-        symbols = list(set([row['symbol'] for row in result.data]))
-        return sorted(symbols)
+        while True:
+            result = client.table('stock_data')\
+                .select('symbol')\
+                .eq('market', market)\
+                .range(offset, offset + page_size - 1)\
+                .execute()
+            
+            if not result.data:
+                break
+            
+            # Add symbols to set
+            all_symbols.update([row['symbol'] for row in result.data])
+            
+            # If we got less than page_size, we're done
+            if len(result.data) < page_size:
+                break
+            
+            offset += page_size
+        
+        return sorted(list(all_symbols))
         
     except Exception as e:
         print(f"Error getting symbols for {market}: {e}")

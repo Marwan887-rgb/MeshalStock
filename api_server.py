@@ -643,36 +643,48 @@ def scan_fibo_gann():
     """فحص جميع الأسهم لاستخراج الفرص (اختراق أو ارتداد)"""
     market = request.args.get('market', 'saudi')
     
+    # تحميل خريطة الأسماء
+    symbols_map = {}
     if market == 'saudi':
-        directory = os.path.join(BASE_DIR, 'data_sa')
-        # تحميل خريطة الأسماء
-        symbols_map = {}
         try:
             symbols_path = os.path.join(BASE_DIR, 'symbols_sa.txt')
             if os.path.exists(symbols_path):
                 df_sym = pd.read_csv(symbols_path)
                 for _, row in df_sym.iterrows():
-                    symbols_map[str(row['Symbol']).strip()] = str(row['NameAr']).strip()
+                    full_symbol = str(row['Symbol']).strip()
+                    name = str(row['NameAr']).strip()
+                    symbols_map[full_symbol] = name
+                    if full_symbol.endswith('.SR'):
+                        symbols_map[full_symbol.replace('.SR', '')] = name
         except: pass
-    elif market == 'us':
-        directory = os.path.join(BASE_DIR, 'data_us')
-        symbols_map = {}
-    else:
-        return jsonify({'error': 'Invalid market'}), 400
-        
-    if not os.path.exists(directory):
-        return jsonify({'results': []})
+    
+    # Get symbols list (Supabase first, CSV fallback)
+    use_db = USE_SUPABASE
+    
+    if use_db:
+        try:
+            symbols = get_all_symbols(market)
+            print(f"Using Supabase: {len(symbols)} symbols from {market}")
+        except Exception as e:
+            print(f"Supabase error, falling back to CSV: {e}")
+            use_db = False
+    
+    if not use_db:
+        # Fallback to CSV
+        directory = os.path.join(BASE_DIR, 'data_sa' if market == 'saudi' else 'data_us')
+        if not os.path.exists(directory):
+            return jsonify({'results': []})
+        symbols = [f[:-4] for f in os.listdir(directory) if f.endswith('.csv')]
         
     results = []
     
-    for filename in os.listdir(directory):
-        if not filename.endswith('.csv'): continue
-        
-        symbol = filename[:-4]
-        file_path = os.path.join(directory, filename)
-        
+    for symbol in symbols:
         try:
-            df = pd.read_csv(file_path)
+            # Use unified data source function
+            df = get_stock_data_from_source(symbol, market)
+            if df is None or len(df) == 0:
+                continue
+            
             levels = calculate_levels(df)
             
             if not levels: continue
@@ -886,8 +898,15 @@ def get_market_data_from_supabase(market, target_date=None):
             if os.path.exists(symbols_path):
                 df_sym = pd.read_csv(symbols_path)
                 for _, row in df_sym.iterrows():
-                    symbols_map[str(row['Symbol']).strip()] = str(row['NameAr']).strip()
-        except: pass
+                    # Store both with and without .SR for flexible lookup
+                    full_symbol = str(row['Symbol']).strip()
+                    name = str(row['NameAr']).strip()
+                    symbols_map[full_symbol] = name
+                    # Also store without .SR suffix
+                    if full_symbol.endswith('.SR'):
+                        symbols_map[full_symbol.replace('.SR', '')] = name
+        except Exception as e:
+            print(f"Warning: Could not load Saudi symbols: {e}")
     
     # Use efficient Python aggregation - fetch all data once, process in memory
     return get_market_data_from_supabase_fallback(client, market, target_date, symbols_map)
@@ -903,6 +922,7 @@ def get_market_data_from_supabase_fallback(client, market, target_date, symbols_
     # This is much faster than querying each symbol separately
     
     # First, determine what dates to fetch
+    # We need at least 2 unique dates per symbol to calculate change
     if target_date:
         # Get data up to target date
         date_query = client.table('stock_data')\
@@ -910,22 +930,22 @@ def get_market_data_from_supabase_fallback(client, market, target_date, symbols_
             .eq('market', market)\
             .lte('date', target_date)\
             .order('date', desc=True)\
-            .limit(500)
+            .limit(1000)
     else:
         # Get recent dates
         date_query = client.table('stock_data')\
             .select('date')\
             .eq('market', market)\
             .order('date', desc=True)\
-            .limit(500)
+            .limit(1000)
     
     date_result = date_query.execute()
     
     if not date_result.data or len(date_result.data) == 0:
         return jsonify({'data': [], 'date': None, 'message': 'لا توجد بيانات'})
     
-    # Get unique dates and take last 5 (enough for latest + previous)
-    unique_dates = sorted(list(set([r['date'] for r in date_result.data])), reverse=True)[:5]
+    # Get unique dates and take last 10 (enough to ensure every symbol has at least 2 entries)
+    unique_dates = sorted(list(set([r['date'] for r in date_result.data])), reverse=True)[:10]
     
     if not unique_dates:
         return jsonify({'data': [], 'date': None, 'message': 'لا توجد تواريخ'})

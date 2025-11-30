@@ -528,27 +528,47 @@ async function startDataFetch(market, btnElement) {
 /**
  * التحقق المستمر من حالة المهمة
  */
+let pollRetryCount = 0;
+const MAX_POLL_RETRIES = 3;
+
 function pollJobStatus(market, btnElement) {
     if (pollInterval) {
         clearInterval(pollInterval);
     }
     
+    pollRetryCount = 0; // إعادة تعيين عداد المحاولات
+    
     pollInterval = setInterval(async () => {
         try {
             const response = await fetch(`${API_URL}/status/${currentJobId}`, {
-                headers: getAuthHeaders()
+                headers: getAuthHeaders(),
+                signal: AbortSignal.timeout(10000) // timeout 10 ثوان
             });
             
             if (!response.ok) {
-                throw new Error('فشل الحصول على حالة المهمة');
+                if (response.status === 404) {
+                    console.warn('Job not found, retrying...');
+                    pollRetryCount++;
+                    
+                    if (pollRetryCount >= MAX_POLL_RETRIES) {
+                        throw new Error('لم يتم العثور على المهمة');
+                    }
+                    return; // إعادة المحاولة في الدورة التالية
+                }
+                throw new Error(`خطأ في الحصول على الحالة: ${response.status}`);
             }
             
             const data = await response.json();
+            
+            // إعادة تعيين عداد المحاولات عند نجاح الطلب
+            pollRetryCount = 0;
+            
             updateProgress(data);
             
             // إيقاف التحقق إذا اكتملت المهمة
             if (data.status === 'completed' || data.status === 'failed' || data.status === 'error') {
                 clearInterval(pollInterval);
+                pollInterval = null;
                 
                 // إيقاف دوران الأيقونة وإعادة تفعيل الزر
                 if (btnElement) {
@@ -559,23 +579,37 @@ function pollJobStatus(market, btnElement) {
                 if (data.status === 'completed') {
                     const marketName = market === 'saudi' ? 'السعودية' : 'الأمريكية';
                     showMessage(`✓ تم تحديث بيانات الأسهم ${marketName} بنجاح!`, 'success');
+                    
+                    // عرض الإحصائيات النهائية
+                    const stats = data.stats || {};
+                    console.log('Update completed:', stats);
                 } else {
-                    showMessage(`✗ فشل التحديث. يرجى مراجعة السجلات.`, 'error');
+                    showMessage(`✗ فشل التحديث. يرجى المحاولة مرة أخرى.`, 'error');
                 }
             }
             
         } catch (error) {
             console.error('خطأ في التحقق من الحالة:', error);
-            clearInterval(pollInterval);
-            showMessage(`خطأ: ${error.message}`, 'error');
             
-            // إيقاف دوران الأيقونة وإعادة تفعيل الزر عند الخطأ
-            if (btnElement) {
-                btnElement.classList.remove('loading');
-                btnElement.disabled = false;
+            pollRetryCount++;
+            
+            // إذا تجاوزنا عدد المحاولات، نوقف الـ polling
+            if (pollRetryCount >= MAX_POLL_RETRIES) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+                showMessage(`خطأ: ${error.message}. جرب إعادة التحديث.`, 'error');
+                
+                // إيقاف دوران الأيقونة وإعادة تفعيل الزر عند الخطأ
+                if (btnElement) {
+                    btnElement.classList.remove('loading');
+                    btnElement.disabled = false;
+                }
+            } else {
+                console.warn(`Retry ${pollRetryCount}/${MAX_POLL_RETRIES}...`);
+                // المحاولة مرة أخرى في الدورة التالية
             }
         }
-    }, 2000);  // التحقق كل ثانيتين
+    }, 3000);  // التحقق كل 3 ثوان (زيادة من 2 ثوان)
 }
 
 /**

@@ -679,9 +679,8 @@ def scan_fibo_gann():
             if client:
                 print(f"Fetching all {market} market data in one query...")
                 
-                # جلب آخر 4-6 أشهر (4 للأمريكي، 6 للسعودي) للسرعة
-                days_back = 120 if market == 'us' else 180
-                months_ago = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+                # جلب آخر 6 أشهر لكلا السوقين
+                six_months_ago = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
                 
                 # Supabase limit is 1000 by default, we need to handle pagination
                 all_data = []
@@ -692,7 +691,7 @@ def scan_fibo_gann():
                     result = client.table('stock_data')\
                         .select('symbol, date, open, high, low, close, volume')\
                         .eq('market', market)\
-                        .gte('date', months_ago)\
+                        .gte('date', six_months_ago)\
                         .order('symbol')\
                         .order('date')\
                         .range(offset, offset + limit - 1)\
@@ -1241,9 +1240,8 @@ def weekly_scan(market):
                 if client:
                     print(f"Fetching all {market} market data for weekly scan...")
                     
-                    # جلب آخر 4-6 أشهر (4 للأمريكي، 6 للسعودي) للسرعة
-                    days_back = 120 if market == 'us' else 180
-                    months_ago = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+                    # جلب آخر 6 أشهر لكلا السوقين
+                    six_months_ago = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
                     
                     all_data = []
                     limit = 1000
@@ -1253,7 +1251,7 @@ def weekly_scan(market):
                         result = client.table('stock_data')\
                             .select('symbol, date, open, high, low, close, volume')\
                             .eq('market', market)\
-                            .gte('date', months_ago)\
+                            .gte('date', six_months_ago)\
                             .order('symbol')\
                             .order('date')\
                             .range(offset, offset + limit - 1)\

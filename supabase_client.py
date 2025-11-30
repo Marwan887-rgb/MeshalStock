@@ -25,10 +25,15 @@ def get_supabase_client():
     
     if supabase is None:
         if not SUPABASE_KEY:
-            raise ValueError("SUPABASE_KEY is not set in environment variables")
+            print("⚠️  SUPABASE_KEY is not set - Supabase features disabled")
+            return None
         
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print(f"✓ Supabase client connected to: {SUPABASE_URL}")
+        try:
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            print(f"✓ Supabase client connected to: {SUPABASE_URL}")
+        except Exception as e:
+            print(f"⚠️  Failed to connect to Supabase: {e}")
+            return None
     
     return supabase
 
@@ -96,6 +101,8 @@ def insert_stock_data(symbol, market, date, open_price, high, low, close, volume
     """
     try:
         client = get_supabase_client()
+        if client is None:
+            return None
         
         data = {
             'symbol': symbol,
@@ -128,6 +135,8 @@ def insert_stock_data_batch(records):
     """
     try:
         client = get_supabase_client()
+        if client is None:
+            return 0
         
         # Convert to proper types
         for record in records:
@@ -161,6 +170,8 @@ def get_stock_data(symbol, market, start_date=None, end_date=None):
     """
     try:
         client = get_supabase_client()
+        if client is None:
+            return []
         
         query = client.table('stock_data').select('*').eq('symbol', symbol).eq('market', market)
         
@@ -191,6 +202,8 @@ def get_all_symbols(market):
     """
     try:
         client = get_supabase_client()
+        if client is None:
+            return []
         
         result = client.table('stock_data').select('symbol').eq('market', market).execute()
         
@@ -216,6 +229,8 @@ def get_latest_date(symbol, market):
     """
     try:
         client = get_supabase_client()
+        if client is None:
+            return None
         
         result = client.table('stock_data').select('date').eq('symbol', symbol).eq('market', market).order('date', desc=True).limit(1).execute()
         

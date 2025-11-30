@@ -12,12 +12,13 @@ import sys
 from pathlib import Path
 
 # Initialize data on first run (background)
+# Note: This is optional and only runs if data files are missing
 try:
     from initialize_data import initialize_data
     print("🔍 Checking for data files on startup...")
     initialize_data(background=True)
 except Exception as e:
-    print(f"⚠️  Could not initialize data: {e}")
+    print(f"⚠️  Could not initialize data (this is OK if using Supabase): {e}")
 
 from api_server import app
 

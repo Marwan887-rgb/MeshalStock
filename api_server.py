@@ -863,9 +863,15 @@ def weekly_scan(market):
             return jsonify({'error': f'Directory not found: {directory}'}), 404
         
         results = []
+        total_stocks = 0
+        passed_green = 0
+        passed_shadow = 0
+        passed_peak = 0
+        passed_volume = 0
         
         # فحص كل سهم
         for filename in os.listdir(directory):
+            total_stocks += 1
             if not filename.endswith('.csv'):
                 continue
             
@@ -902,14 +908,27 @@ def weekly_scan(market):
                 
                 # الشرط 1: شمعة خضراء بإغلاق قريب من الأعلى
                 is_green = last_candle['Close'] > last_candle['Open']
+                
+                if not is_green:
+                    continue
+                
+                passed_green += 1
+                
                 body_size = abs(last_candle['Close'] - last_candle['Open'])
                 upper_shadow = last_candle['High'] - max(last_candle['Open'], last_candle['Close'])
                 
                 # الظل العلوي يجب أن يكون أقل من 30% من حجم الجسم
-                has_short_upper_shadow = upper_shadow < (body_size * 0.3)
+                # تجنب القسمة على صفر إذا كان الجسم صغير جداً
+                if body_size > 0:
+                    has_short_upper_shadow = upper_shadow < (body_size * 0.3)
+                else:
+                    # إذا كان الجسم = 0 (doji)، نتحقق من الظل فقط
+                    has_short_upper_shadow = upper_shadow < 0.01
                 
-                if not (is_green and has_short_upper_shadow):
+                if not has_short_upper_shadow:
                     continue
+                
+                passed_shadow += 1
                 
                 # الشرط 2: الإغلاق متجاوز أو على حدود قمة سابقة (6 أشهر)
                 last_6_months = weekly.iloc[-26:-1]  # آخر 26 أسبوع (6 أشهر) عدا الأخير
@@ -921,11 +940,15 @@ def weekly_scan(market):
                 if not close_near_or_above_peak:
                     continue
                 
+                passed_peak += 1
+                
                 # الشرط 3: الحجم أكبر من الشمعة السابقة
                 volume_increased = last_candle['Volume'] > prev_candle['Volume']
                 
                 if not volume_increased:
                     continue
+                
+                passed_volume += 1
                 
                 # جميع الشروط تحققت!
                 volume_ratio = (last_candle['Volume'] / prev_candle['Volume']) if prev_candle['Volume'] > 0 else 1
@@ -952,11 +975,28 @@ def weekly_scan(market):
         # ترتيب النتائج حسب نسبة التغيير
         results.sort(key=lambda x: x['change_percent'], reverse=True)
         
+        # طباعة إحصائيات الفحص
+        print(f"\n=== Weekly Scan Stats for {market.upper()} ===")
+        print(f"Total stocks checked: {total_stocks}")
+        print(f"Passed green candle: {passed_green}")
+        print(f"Passed short shadow: {passed_shadow}")
+        print(f"Passed peak level: {passed_peak}")
+        print(f"Passed volume increase: {passed_volume}")
+        print(f"Final results: {len(results)}")
+        print("=" * 40)
+        
         return jsonify({
             'success': True,
             'market': market,
             'count': len(results),
-            'results': results
+            'results': results,
+            'stats': {
+                'total_checked': total_stocks,
+                'passed_green': passed_green,
+                'passed_shadow': passed_shadow,
+                'passed_peak': passed_peak,
+                'passed_volume': passed_volume
+            }
         })
         
     except Exception as e:

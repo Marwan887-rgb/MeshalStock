@@ -921,15 +921,17 @@ def weekly_scan(market):
         passed_volume = 0
         
         # جلب قائمة الأسهم
-        if USE_SUPABASE:
+        use_db = USE_SUPABASE  # Local variable for this request
+        
+        if use_db:
             try:
                 symbols = get_all_symbols(market)
                 print(f"Using Supabase: {len(symbols)} symbols from {market}")
             except Exception as e:
                 print(f"Supabase error, falling back to CSV: {e}")
-                USE_SUPABASE = False
+                use_db = False
         
-        if not USE_SUPABASE:
+        if not use_db:
             # Fallback to CSV
             directory = os.path.join(BASE_DIR, 'data_sa' if market == 'saudi' else 'data_us')
             if not os.path.exists(directory):

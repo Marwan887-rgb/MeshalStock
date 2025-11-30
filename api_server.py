@@ -379,7 +379,7 @@ def market_summary():
     try:
         print(f"Fetching market summary for: {list(tickers.keys())}")
         # جلب البيانات دفعة واحدة لتحسين الأداء
-        data = yf.download(list(tickers.values()), period="5d", progress=False)
+        data = yf.download(list(tickers.values()), period="5d", progress=False, auto_adjust=True)
         
         # التحقق من أن البيانات ليست فارغة
         if data.empty:

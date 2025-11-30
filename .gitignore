@@ -67,5 +67,6 @@ dist/
 .cache/
 
 # Data files (اختياري - احتفظ بالبيانات أو تجاهلها)
-# data_sa/
-# data_us/
+data_sa/*.csv
+data_us/*.csv
+# Keep the directories but ignore CSV files
